@@ -1,8 +1,8 @@
 import { defer } from "@/util/defer"
-import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CliRenderer } from "@opentui/core"
+import { writeFile, readText } from "@/util/fs-extra"
 
 export namespace Editor {
   export async function open(opts: { value: string; renderer: CliRenderer }): Promise<string | undefined> {
@@ -10,20 +10,20 @@ export namespace Editor {
     if (!editor) return
 
     const filepath = join(tmpdir(), `${Date.now()}.md`)
-    await using _ = defer(async () => rm(filepath, { force: true }))
+    await using _ = defer(async () => { try { await Deno.remove(filepath) } catch {} })
 
-    await Bun.write(filepath, opts.value)
+    await writeFile(filepath, opts.value)
     opts.renderer.suspend()
     opts.renderer.currentRenderBuffer.clear()
     const parts = editor.split(" ")
-    const proc = Bun.spawn({
-      cmd: [...parts, filepath],
+    const proc = new Deno.Command(parts[0], {
+      args: [...parts.slice(1), filepath],
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
-    })
-    await proc.exited
-    const content = await Bun.file(filepath).text()
+    }).spawn()
+    await proc.status
+    const content = await readText(filepath)
     opts.renderer.currentRenderBuffer.clear()
     opts.renderer.resume()
     opts.renderer.requestRender()

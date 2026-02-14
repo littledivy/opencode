@@ -7,6 +7,8 @@ import { Instance } from "../project/instance"
 import { Flag } from "@/flag/flag"
 import { Log } from "../util/log"
 import type { MessageV2 } from "./message-v2"
+import { exists, readText } from "@/util/fs-extra"
+import { Glob } from "@/util/glob"
 
 const log = Log.create({ service: "instruction" })
 
@@ -85,7 +87,7 @@ export namespace InstructionPrompt {
     }
 
     for (const file of globalFiles()) {
-      if (await Bun.file(file).exists()) {
+      if (await exists(file)) {
         paths.add(path.resolve(file))
         break
       }
@@ -99,7 +101,7 @@ export namespace InstructionPrompt {
         }
         const matches = path.isAbsolute(instruction)
           ? await Array.fromAsync(
-              new Bun.Glob(path.basename(instruction)).scan({
+              new Glob(path.basename(instruction)).scan({
                 cwd: path.dirname(instruction),
                 absolute: true,
                 onlyFiles: true,
@@ -120,8 +122,7 @@ export namespace InstructionPrompt {
     const paths = await systemPaths()
 
     const files = Array.from(paths).map(async (p) => {
-      const content = await Bun.file(p)
-        .text()
+      const content = await readText(p)
         .catch(() => "")
       return content ? "Instructions from: " + p + "\n" + content : ""
     })
@@ -164,7 +165,7 @@ export namespace InstructionPrompt {
   export async function find(dir: string) {
     for (const file of FILES) {
       const filepath = path.resolve(path.join(dir, file))
-      if (await Bun.file(filepath).exists()) return filepath
+      if (await exists(filepath)) return filepath
     }
   }
 
@@ -182,8 +183,7 @@ export namespace InstructionPrompt {
 
       if (found && found !== target && !system.has(found) && !already.has(found) && !isClaimed(messageID, found)) {
         claim(messageID, found)
-        const content = await Bun.file(found)
-          .text()
+        const content = await readText(found)
           .catch(() => undefined)
         if (content) {
           results.push({ filepath: found, content: "Instructions from: " + found + "\n" + content })

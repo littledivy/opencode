@@ -1,5 +1,4 @@
 import z from "zod"
-import * as fs from "fs"
 import * as path from "path"
 import { Tool } from "./tool"
 import { LSP } from "../lsp"
@@ -9,6 +8,8 @@ import { Instance } from "../project/instance"
 import { Identifier } from "../id/id"
 import { assertExternalDirectory } from "./external-directory"
 import { InstructionPrompt } from "../session/instruction"
+import { readText } from "@/util/fs-extra"
+import mime from "npm:mime-types"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -31,12 +32,11 @@ export const ReadTool = Tool.define("read", {
     }
     const title = path.relative(Instance.worktree, filepath)
 
-    const file = Bun.file(filepath)
-    const stat = await file.stat().catch(() => undefined)
+    const stat = await Deno.stat(filepath).catch(() => undefined)
 
     await assertExternalDirectory(ctx, filepath, {
       bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
-      kind: stat?.isDirectory() ? "directory" : "file",
+      kind: stat?.isDirectory ? "directory" : "file",
     })
 
     await ctx.ask({
@@ -50,7 +50,7 @@ export const ReadTool = Tool.define("read", {
       const dir = path.dirname(filepath)
       const base = path.basename(filepath)
 
-      const dirEntries = fs.readdirSync(dir)
+      const dirEntries = Array.from(Deno.readDirSync(dir)).map((e) => e.name)
       const suggestions = dirEntries
         .filter(
           (entry) =>
@@ -66,14 +66,17 @@ export const ReadTool = Tool.define("read", {
       throw new Error(`File not found: ${filepath}`)
     }
 
-    if (stat.isDirectory()) {
-      const dirents = await fs.promises.readdir(filepath, { withFileTypes: true })
+    if (stat.isDirectory) {
+      const dirEntries: { name: string; isDirectory: boolean; isSymlink: boolean }[] = []
+      for await (const entry of Deno.readDir(filepath)) {
+        dirEntries.push(entry)
+      }
       const entries = await Promise.all(
-        dirents.map(async (dirent) => {
-          if (dirent.isDirectory()) return dirent.name + "/"
-          if (dirent.isSymbolicLink()) {
-            const target = await fs.promises.stat(path.join(filepath, dirent.name)).catch(() => undefined)
-            if (target?.isDirectory()) return dirent.name + "/"
+        dirEntries.map(async (dirent) => {
+          if (dirent.isDirectory) return dirent.name + "/"
+          if (dirent.isSymlink) {
+            const target = await Deno.stat(path.join(filepath, dirent.name)).catch(() => undefined)
+            if (target?.isDirectory) return dirent.name + "/"
           }
           return dirent.name
         }),
@@ -111,11 +114,11 @@ export const ReadTool = Tool.define("read", {
     const instructions = await InstructionPrompt.resolve(ctx.messages, filepath, ctx.messageID)
 
     // Exclude SVG (XML-based) and vnd.fastbidsheet (.fbs extension, commonly FlatBuffers schema files)
+    const mimeType = mime.lookup(filepath) || "application/octet-stream"
     const isImage =
-      file.type.startsWith("image/") && file.type !== "image/svg+xml" && file.type !== "image/vnd.fastbidsheet"
-    const isPdf = file.type === "application/pdf"
+      mimeType.startsWith("image/") && mimeType !== "image/svg+xml" && mimeType !== "image/vnd.fastbidsheet"
+    const isPdf = mimeType === "application/pdf"
     if (isImage || isPdf) {
-      const mime = file.type
       const msg = `${isImage ? "Image" : "PDF"} read successfully`
       return {
         title,
@@ -131,20 +134,20 @@ export const ReadTool = Tool.define("read", {
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
             type: "file",
-            mime,
-            url: `data:${mime};base64,${Buffer.from(await file.bytes()).toString("base64")}`,
+            mime: mimeType,
+            url: `data:${mimeType};base64,${Buffer.from(await Deno.readFile(filepath)).toString("base64")}`,
           },
         ],
       }
     }
 
-    const isBinary = await isBinaryFile(filepath, file)
+    const isBinary = await isBinaryFile(filepath)
     if (isBinary) throw new Error(`Cannot read binary file: ${filepath}`)
 
     const limit = params.limit ?? DEFAULT_READ_LIMIT
     const offset = params.offset ?? 1
     const start = offset - 1
-    const lines = await file.text().then((text) => text.split("\n"))
+    const lines = await readText(filepath).then((text) => text.split("\n"))
     if (start >= lines.length) throw new Error(`Offset ${offset} is out of range for this file (${lines.length} lines)`)
 
     const raw: string[] = []
@@ -203,7 +206,7 @@ export const ReadTool = Tool.define("read", {
   },
 })
 
-async function isBinaryFile(filepath: string, file: Bun.BunFile): Promise<boolean> {
+async function isBinaryFile(filepath: string): Promise<boolean> {
   const ext = path.extname(filepath).toLowerCase()
   // binary check for common non-text extensions
   switch (ext) {
@@ -240,14 +243,16 @@ async function isBinaryFile(filepath: string, file: Bun.BunFile): Promise<boolea
       break
   }
 
-  const stat = await file.stat()
-  const fileSize = stat.size
-  if (fileSize === 0) return false
+  const fileStat = await Deno.stat(filepath)
+  const size = fileStat.size
+  if (size === 0) return false
 
-  const bufferSize = Math.min(4096, fileSize)
-  const buffer = await file.arrayBuffer()
-  if (buffer.byteLength === 0) return false
-  const bytes = new Uint8Array(buffer.slice(0, bufferSize))
+  const bufferSize = Math.min(4096, size)
+  const file = await Deno.open(filepath, { read: true })
+  const bytes = new Uint8Array(bufferSize)
+  await file.read(bytes)
+  file.close()
+  if (bytes.length === 0) return false
 
   let nonPrintableCount = 0
   for (let i = 0; i < bytes.length; i++) {

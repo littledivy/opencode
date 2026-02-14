@@ -22,6 +22,7 @@ import { Clipboard } from "../../util/clipboard"
 import type { FilePart } from "@opencode-ai/sdk/v2"
 import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
+import { stringWidth } from "@/util/string"
 import { Locale } from "@/util/locale"
 import { formatDuration } from "@/util/format"
 import { createColors, createFrames } from "../../ui/spinner.ts"
@@ -324,7 +325,7 @@ export function Prompt(props: PromptProps) {
             parts: updatedNonTextParts,
           })
           restoreExtmarksFromParts(updatedNonTextParts)
-          input.cursorOffset = Bun.stringWidth(content)
+          input.cursorOffset = stringWidth(content)
         },
       },
       {
@@ -931,29 +932,35 @@ export function Prompt(props: PromptProps) {
                 const isUrl = /^(https?):\/\//.test(filepath)
                 if (!isUrl) {
                   try {
-                    const file = Bun.file(filepath)
-                    // Handle SVG as raw text content, not as base64 image
-                    if (file.type === "image/svg+xml") {
-                      event.preventDefault()
-                      const content = await file.text().catch(() => {})
-                      if (content) {
-                        pasteText(content, `[SVG: ${file.name ?? "image"}]`)
-                        return
+                    const fsp = await import("node:fs/promises")
+                    const pathMod = await import("node:path")
+                    const ext = pathMod.default.extname(filepath).toLowerCase().slice(1)
+                    const mimeMap: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/x-icon", bmp: "image/bmp", tiff: "image/tiff", avif: "image/avif" }
+                    const mime = mimeMap[ext]
+                    if (mime) {
+                      const filename = pathMod.default.basename(filepath)
+                      // Handle SVG as raw text content, not as base64 image
+                      if (mime === "image/svg+xml") {
+                        event.preventDefault()
+                        const content = await fsp.readFile(filepath, "utf-8").catch(() => {})
+                        if (content) {
+                          pasteText(content, `[SVG: ${filename ?? "image"}]`)
+                          return
+                        }
                       }
-                    }
-                    if (file.type.startsWith("image/")) {
-                      event.preventDefault()
-                      const content = await file
-                        .arrayBuffer()
-                        .then((buffer) => Buffer.from(buffer).toString("base64"))
-                        .catch(() => {})
-                      if (content) {
-                        await pasteImage({
-                          filename: file.name,
-                          mime: file.type,
-                          content,
-                        })
-                        return
+                      if (mime.startsWith("image/")) {
+                        event.preventDefault()
+                        const content = await fsp.readFile(filepath)
+                          .then((buffer) => Buffer.from(buffer).toString("base64"))
+                          .catch(() => {})
+                        if (content) {
+                          await pasteImage({
+                            filename,
+                            mime,
+                            content,
+                          })
+                          return
+                        }
                       }
                     }
                   } catch {}

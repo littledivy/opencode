@@ -59,8 +59,8 @@ export namespace FileTime {
 
     const time = get(sessionID, filepath)
     if (!time) throw new Error(`You must read file ${filepath} before overwriting it. Use the Read tool first`)
-    const stats = await Bun.file(filepath).stat()
-    if (stats.mtime.getTime() > time.getTime()) {
+    const stats = await Deno.stat(filepath)
+    if ((stats.mtime?.getTime() ?? 0) > time.getTime()) {
       throw new Error(
         `File ${filepath} has been modified since it was last read.\nLast modification: ${stats.mtime.toISOString()}\nLast read: ${time.toISOString()}\n\nPlease read the file again before modifying it.`,
       )

@@ -5,8 +5,10 @@ import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { lazy } from "../util/lazy"
 import { Lock } from "../util/lock"
-import { $ } from "bun"
+import { $ } from "@/util/shell"
 import { NamedError } from "@opencode-ai/util/error"
+import { readJSON, readText, writeFile } from "@/util/fs-extra"
+import { Glob } from "@/util/glob"
 import z from "zod"
 
 export namespace Storage {
@@ -25,7 +27,7 @@ export namespace Storage {
     async (dir) => {
       const project = path.resolve(dir, "../project")
       if (!(await Filesystem.isDir(project))) return
-      for await (const projectDir of new Bun.Glob("*").scan({
+      for await (const projectDir of new Glob("*").scan({
         cwd: project,
         onlyFiles: false,
       })) {
@@ -35,11 +37,11 @@ export namespace Storage {
         let worktree = "/"
 
         if (projectID !== "global") {
-          for await (const msgFile of new Bun.Glob("storage/session/message/*/*.json").scan({
+          for await (const msgFile of new Glob("storage/session/message/*/*.json").scan({
             cwd: path.join(project, projectDir),
             absolute: true,
           })) {
-            const json = await Bun.file(msgFile).json()
+            const json = await readJSON(msgFile)
             worktree = json.path?.root
             if (worktree) break
           }
@@ -60,7 +62,7 @@ export namespace Storage {
           if (!id) continue
           projectID = id
 
-          await Bun.write(
+          await writeFile(
             path.join(dir, "project", projectID + ".json"),
             JSON.stringify({
               id,
@@ -74,7 +76,7 @@ export namespace Storage {
           )
 
           log.info(`migrating sessions for project ${projectID}`)
-          for await (const sessionFile of new Bun.Glob("storage/session/info/*.json").scan({
+          for await (const sessionFile of new Glob("storage/session/info/*.json").scan({
             cwd: fullProjectDir,
             absolute: true,
           })) {
@@ -83,10 +85,10 @@ export namespace Storage {
               sessionFile,
               dest,
             })
-            const session = await Bun.file(sessionFile).json()
-            await Bun.write(dest, JSON.stringify(session))
+            const session = await readJSON(sessionFile)
+            await writeFile(dest, JSON.stringify(session))
             log.info(`migrating messages for session ${session.id}`)
-            for await (const msgFile of new Bun.Glob(`storage/session/message/${session.id}/*.json`).scan({
+            for await (const msgFile of new Glob(`storage/session/message/${session.id}/*.json`).scan({
               cwd: fullProjectDir,
               absolute: true,
             })) {
@@ -95,23 +97,23 @@ export namespace Storage {
                 msgFile,
                 dest,
               })
-              const message = await Bun.file(msgFile).json()
-              await Bun.write(dest, JSON.stringify(message))
+              const message = await readJSON(msgFile)
+              await writeFile(dest, JSON.stringify(message))
 
               log.info(`migrating parts for message ${message.id}`)
-              for await (const partFile of new Bun.Glob(`storage/session/part/${session.id}/${message.id}/*.json`).scan(
+              for await (const partFile of new Glob(`storage/session/part/${session.id}/${message.id}/*.json`).scan(
                 {
                   cwd: fullProjectDir,
                   absolute: true,
                 },
               )) {
                 const dest = path.join(dir, "part", message.id, path.basename(partFile))
-                const part = await Bun.file(partFile).json()
+                const part = await readJSON(partFile)
                 log.info("copying", {
                   partFile,
                   dest,
                 })
-                await Bun.write(dest, JSON.stringify(part))
+                await writeFile(dest, JSON.stringify(part))
               }
             }
           }
@@ -119,16 +121,16 @@ export namespace Storage {
       }
     },
     async (dir) => {
-      for await (const item of new Bun.Glob("session/*/*.json").scan({
+      for await (const item of new Glob("session/*/*.json").scan({
         cwd: dir,
         absolute: true,
       })) {
-        const session = await Bun.file(item).json()
+        const session = await readJSON(item)
         if (!session.projectID) continue
         if (!session.summary?.diffs) continue
         const { diffs } = session.summary
-        await Bun.file(path.join(dir, "session_diff", session.id + ".json")).write(JSON.stringify(diffs))
-        await Bun.file(path.join(dir, "session", session.projectID, session.id + ".json")).write(
+        await writeFile(path.join(dir, "session_diff", session.id + ".json"), JSON.stringify(diffs))
+        await writeFile(path.join(dir, "session", session.projectID, session.id + ".json"),
           JSON.stringify({
             ...session,
             summary: {
@@ -143,15 +145,14 @@ export namespace Storage {
 
   const state = lazy(async () => {
     const dir = path.join(Global.Path.data, "storage")
-    const migration = await Bun.file(path.join(dir, "migration"))
-      .json()
+    const migration = await readText(path.join(dir, "migration"))
       .then((x) => parseInt(x))
       .catch(() => 0)
     for (let index = migration; index < MIGRATIONS.length; index++) {
       log.info("running migration", { index })
       const migration = MIGRATIONS[index]
       await migration(dir).catch(() => log.error("failed to run migration", { index }))
-      await Bun.write(path.join(dir, "migration"), (index + 1).toString())
+      await writeFile(path.join(dir, "migration"), (index + 1).toString())
     }
     return {
       dir,
@@ -171,7 +172,7 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.read(target)
-      const result = await Bun.file(target).json()
+      const result = await readJSON(target)
       return result as T
     })
   }
@@ -181,9 +182,9 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      const content = await Bun.file(target).json()
+      const content = await readJSON(target)
       fn(content)
-      await Bun.write(target, JSON.stringify(content, null, 2))
+      await writeFile(target, JSON.stringify(content, null, 2))
       return content as T
     })
   }
@@ -193,7 +194,7 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      await Bun.write(target, JSON.stringify(content, null, 2))
+      await writeFile(target, JSON.stringify(content, null, 2))
     })
   }
 
@@ -208,7 +209,7 @@ export namespace Storage {
     })
   }
 
-  const glob = new Bun.Glob("**/*")
+  const glob = new Glob("**/*")
   export async function list(prefix: string[]) {
     const dir = await state().then((x) => x.dir)
     try {

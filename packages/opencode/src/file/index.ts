@@ -1,10 +1,9 @@
 import { BusEvent } from "@/bus/bus-event"
 import z from "zod"
-import { $ } from "bun"
-import type { BunFile } from "bun"
+import { $ } from "../util/shell"
+import { exists, readText } from "../util/fs-extra"
 import { formatPatch, structuredPatch } from "diff"
 import path from "path"
-import fs from "fs"
 import ignore from "ignore"
 import { Log } from "../util/log"
 import { Filesystem } from "../util/filesystem"
@@ -241,20 +240,12 @@ export namespace File {
     return mimeType.startsWith("image/")
   }
 
-  async function shouldEncode(file: BunFile): Promise<boolean> {
-    const type = file.type?.toLowerCase()
-    log.info("shouldEncode", { type })
-    if (!type) return false
-
-    if (type.startsWith("text/")) return false
-    if (type.includes("charset=")) return false
-
-    const parts = type.split("/", 2)
-    const top = parts[0]
-
-    const tops = ["image", "audio", "video", "font", "model", "multipart"]
-    if (tops.includes(top)) return true
-
+  async function shouldEncodeByExtension(filepath: string): Promise<boolean> {
+    const ext = path.extname(filepath).toLowerCase().slice(1)
+    if (!ext) return false
+    // Image files should be encoded
+    if (imageExtensions.has(ext)) return true
+    // Binary files are already handled separately
     return false
   }
 
@@ -290,19 +281,31 @@ export namespace File {
         const shouldIgnore = (name: string) => name.startsWith(".") || ignore.has(name)
         const shouldIgnoreNested = (name: string) => name.startsWith(".") || ignoreNested.has(name)
 
-        const top = await fs.promises
-          .readdir(Instance.directory, { withFileTypes: true })
-          .catch(() => [] as fs.Dirent[])
+        const topEntries: Deno.DirEntry[] = []
+        try {
+          for await (const entry of Deno.readDir(Instance.directory)) {
+            topEntries.push(entry)
+          }
+        } catch {
+          // ignore errors
+        }
 
-        for (const entry of top) {
-          if (!entry.isDirectory()) continue
+        for (const entry of topEntries) {
+          if (!entry.isDirectory) continue
           if (shouldIgnore(entry.name)) continue
           dirs.add(entry.name + "/")
 
           const base = path.join(Instance.directory, entry.name)
-          const children = await fs.promises.readdir(base, { withFileTypes: true }).catch(() => [] as fs.Dirent[])
-          for (const child of children) {
-            if (!child.isDirectory()) continue
+          const childEntries: Deno.DirEntry[] = []
+          try {
+            for await (const child of Deno.readDir(base)) {
+              childEntries.push(child)
+            }
+          } catch {
+            // ignore errors
+          }
+          for (const child of childEntries) {
+            if (!child.isDirectory) continue
             if (shouldIgnoreNested(child.name)) continue
             dirs.add(entry.name + "/" + child.name + "/")
           }
@@ -385,7 +388,7 @@ export namespace File {
       const untrackedFiles = untrackedOutput.trim().split("\n")
       for (const filepath of untrackedFiles) {
         try {
-          const content = await Bun.file(path.join(Instance.directory, filepath)).text()
+          const content = await readText(path.join(Instance.directory, filepath))
           const lines = content.split("\n").length
           changedFiles.push({
             path: filepath,
@@ -437,10 +440,9 @@ export namespace File {
 
     // Fast path: check extension before any filesystem operations
     if (isImageByExtension(file)) {
-      const bunFile = Bun.file(full)
-      if (await bunFile.exists()) {
-        const buffer = await bunFile.arrayBuffer().catch(() => new ArrayBuffer(0))
-        const content = Buffer.from(buffer).toString("base64")
+      if (await exists(full)) {
+        const bytes = await Deno.readFile(full).catch(() => new Uint8Array(0))
+        const content = Buffer.from(bytes).toString("base64")
         const mimeType = getImageMimeType(file)
         return { type: "text", content, mimeType, encoding: "base64" }
       }
@@ -451,27 +453,24 @@ export namespace File {
       return { type: "binary", content: "" }
     }
 
-    const bunFile = Bun.file(full)
-
-    if (!(await bunFile.exists())) {
+    if (!(await exists(full))) {
       return { type: "text", content: "" }
     }
 
-    const encode = await shouldEncode(bunFile)
-    const mimeType = bunFile.type || "application/octet-stream"
+    const encode = await shouldEncodeByExtension(full)
+    const mimeType = isImageByExtension(full) ? getImageMimeType(full) : "application/octet-stream"
 
     if (encode && !isImage(mimeType)) {
       return { type: "binary", content: "", mimeType }
     }
 
     if (encode) {
-      const buffer = await bunFile.arrayBuffer().catch(() => new ArrayBuffer(0))
-      const content = Buffer.from(buffer).toString("base64")
+      const bytes = await Deno.readFile(full).catch(() => new Uint8Array(0))
+      const content = Buffer.from(bytes).toString("base64")
       return { type: "text", content, mimeType, encoding: "base64" }
     }
 
-    const content = await bunFile
-      .text()
+    const content = await readText(full)
       .catch(() => "")
       .then((x) => x.trim())
 
@@ -497,13 +496,13 @@ export namespace File {
     let ignored = (_: string) => false
     if (project.vcs === "git") {
       const ig = ignore()
-      const gitignore = Bun.file(path.join(Instance.worktree, ".gitignore"))
-      if (await gitignore.exists()) {
-        ig.add(await gitignore.text())
+      const gitignorePath = path.join(Instance.worktree, ".gitignore")
+      if (await exists(gitignorePath)) {
+        ig.add(await readText(gitignorePath))
       }
-      const ignoreFile = Bun.file(path.join(Instance.worktree, ".ignore"))
-      if (await ignoreFile.exists()) {
-        ig.add(await ignoreFile.text())
+      const ignoreFilePath = path.join(Instance.worktree, ".ignore")
+      if (await exists(ignoreFilePath)) {
+        ig.add(await readText(ignoreFilePath))
       }
       ignored = ig.ignores.bind(ig)
     }
@@ -516,15 +515,19 @@ export namespace File {
     }
 
     const nodes: Node[] = []
-    for (const entry of await fs.promises
-      .readdir(resolved, {
-        withFileTypes: true,
-      })
-      .catch(() => [])) {
+    const dirEntries: Deno.DirEntry[] = []
+    try {
+      for await (const entry of Deno.readDir(resolved)) {
+        dirEntries.push(entry)
+      }
+    } catch {
+      // ignore errors
+    }
+    for (const entry of dirEntries) {
       if (exclude.includes(entry.name)) continue
       const fullPath = path.join(resolved, entry.name)
       const relativePath = path.relative(Instance.directory, fullPath)
-      const type = entry.isDirectory() ? "directory" : "file"
+      const type = entry.isDirectory ? "directory" : "file"
       nodes.push({
         name: entry.name,
         path: relativePath,

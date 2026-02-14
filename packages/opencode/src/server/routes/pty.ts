@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
-import { upgradeWebSocket } from "hono/bun"
+import { upgradeWebSocket } from "hono/deno"
 import z from "zod"
 import { Pty } from "@/pty"
 import { Storage } from "../../storage/storage"

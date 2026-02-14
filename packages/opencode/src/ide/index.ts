@@ -1,6 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
-import { spawn } from "bun"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
 import { Log } from "../util/log"
@@ -52,23 +51,21 @@ export namespace Ide {
     const cmd = SUPPORTED_IDES.find((i) => i.name === ide)?.cmd
     if (!cmd) throw new Error(`Unknown IDE: ${ide}`)
 
-    const p = spawn([cmd, "--install-extension", "sst-dev.opencode"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    await p.exited
-    const stdout = await new Response(p.stdout).text()
-    const stderr = await new Response(p.stderr).text()
-
-    log.info("installed", {
-      ide,
-      stdout,
-      stderr,
-    })
-
-    if (p.exitCode !== 0) {
-      throw new InstallFailedError({ stderr })
+    let stdout: string
+    let stderr: string
+    try {
+      const output = await new Deno.Command(cmd, { args: ["--install-extension", "sst-dev.opencode"] }).output()
+      stdout = new TextDecoder().decode(output.stdout)
+      stderr = new TextDecoder().decode(output.stderr)
+      if (!output.success) {
+        throw { stdout, stderr, message: `Process exited with code ${output.code}` }
+      }
+    } catch (err: any) {
+      log.info("install failed", { ide, stdout: err.stdout ?? "", stderr: err.stderr ?? "" })
+      throw new InstallFailedError({ stderr: err.stderr ?? err.message })
     }
+
+    log.info("installed", { ide, stdout, stderr })
     if (stdout.includes("already installed")) {
       throw new AlreadyInstalledError({})
     }

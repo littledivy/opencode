@@ -41,6 +41,8 @@ import { useRenderer } from "@opentui/solid"
 import { createStore, produce } from "solid-js/store"
 import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
+import { Glob } from "@/util/glob"
+import { readJSON } from "@/util/fs-extra"
 
 type ThemeColors = {
   primary: RGBA
@@ -391,7 +393,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   },
 })
 
-const CUSTOM_THEME_GLOB = new Bun.Glob("themes/*.json")
+const CUSTOM_THEME_GLOB = new Glob("themes/*.json")
 async function getCustomThemes() {
   const directories = [
     Global.Path.config,
@@ -412,7 +414,7 @@ async function getCustomThemes() {
       cwd: dir,
     })) {
       const name = path.basename(item, ".json")
-      result[name] = await Bun.file(item).json()
+      result[name] = await readJSON(item)
     }
   }
   return result

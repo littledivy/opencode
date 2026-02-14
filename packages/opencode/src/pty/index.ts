@@ -1,6 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
-import { type IPty } from "bun-pty"
 import z from "zod"
 import { Identifier } from "../id/id"
 import { Log } from "../util/log"
@@ -8,6 +7,7 @@ import { Instance } from "../project/instance"
 import { lazy } from "@opencode-ai/util/lazy"
 import { Shell } from "@/shell/shell"
 import { Plugin } from "@/plugin"
+import { type IPty } from "./sigma"
 
 export namespace Pty {
   const log = Log.create({ service: "pty" })
@@ -43,7 +43,7 @@ export namespace Pty {
   }
 
   const pty = lazy(async () => {
-    const { spawn } = await import("bun-pty")
+    const { spawn } = await import("./sigma")
     return spawn
   })
 
@@ -152,7 +152,7 @@ export namespace Pty {
     log.info("creating session", { id, cmd: command, args, cwd })
 
     const spawn = await pty()
-    const ptyProcess = spawn(command, args, {
+    const ptyProcess = await spawn(command, args, {
       name: "xterm-256color",
       cwd,
       env,

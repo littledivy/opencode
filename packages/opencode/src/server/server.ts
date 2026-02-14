@@ -33,7 +33,6 @@ import { lazy } from "../util/lazy"
 import { InstanceBootstrap } from "../project/bootstrap"
 import { Storage } from "../storage/storage"
 import type { ContentfulStatusCode } from "hono/utils/http-status"
-import { websocket } from "hono/bun"
 import { HTTPException } from "hono/http-exception"
 import { errors } from "./error"
 import { QuestionRoutes } from "./routes/question"
@@ -579,41 +578,57 @@ export namespace Server {
     cors?: string[]
   }) {
     _corsWhitelist = opts.cors ?? []
+    let lastError: unknown
+    const fetch = ((request: Request, info: Deno.ServeHandlerInfo) => {
+      const app = App()
+      if (typeof app.fetch !== "function") {
+        throw new Error("Server app fetch handler is unavailable")
+      }
+      return app.fetch(request, info)
+    }) satisfies Deno.ServeHandler
 
-    const args = {
-      hostname: opts.hostname,
-      idleTimeout: 0,
-      fetch: App().fetch,
-      websocket: websocket,
-    } as const
-    const tryServe = (port: number) => {
+    const tryServe = (hostname: string | undefined, port: number) => {
       try {
-        return Bun.serve({ ...args, port })
-      } catch {
+        if (hostname) {
+          return Deno.serve({ hostname, port }, fetch)
+        }
+        return Deno.serve({ port }, fetch)
+      } catch (error) {
+        lastError = error
         return undefined
       }
     }
-    const server = opts.port === 0 ? (tryServe(4096) ?? tryServe(0)) : tryServe(opts.port)
-    if (!server) throw new Error(`Failed to start server on port ${opts.port}`)
+    const ports = opts.port === 0 ? [4096, 0] : [opts.port]
+    const hosts = [opts.hostname, "127.0.0.1", "localhost", undefined]
+    const server = ports
+      .flatMap((port) => hosts.map((host) => tryServe(host, port)))
+      .find((x) => x !== undefined)
+    if (!server) {
+      const reason = lastError instanceof Error ? lastError.message : String(lastError)
+      throw new Error(`Failed to start server on port ${opts.port}: ${reason}`)
+    }
 
-    _url = server.url
+    const addr = server.addr as Deno.NetAddr
+    const serverPort = addr.port
+    const urlHost = addr.hostname || opts.hostname || "127.0.0.1"
+    _url = new URL(`http://${urlHost}:${serverPort}`)
 
     const shouldPublishMDNS =
       opts.mdns &&
-      server.port &&
+      serverPort &&
       opts.hostname !== "127.0.0.1" &&
       opts.hostname !== "localhost" &&
       opts.hostname !== "::1"
     if (shouldPublishMDNS) {
-      MDNS.publish(server.port!, opts.mdnsDomain)
+      MDNS.publish(serverPort, opts.mdnsDomain)
     } else if (opts.mdns) {
       log.warn("mDNS enabled but hostname is loopback; skipping mDNS publish")
     }
 
-    const originalStop = server.stop.bind(server)
-    server.stop = async (closeActiveConnections?: boolean) => {
+    const originalShutdown = server.shutdown.bind(server)
+    ;(server as any).stop = async (_closeActiveConnections?: boolean) => {
       if (shouldPublishMDNS) MDNS.unpublish()
-      return originalStop(closeActiveConnections)
+      return originalShutdown()
     }
 
     return server

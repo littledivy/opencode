@@ -72,6 +72,7 @@ import { Footer } from "./footer.tsx"
 import { usePromptRef } from "../../context/prompt"
 import { useExit } from "../../context/exit"
 import { Filesystem } from "@/util/filesystem"
+import { writeFile } from "@/util/fs-extra"
 import { Global } from "@/global"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
@@ -845,12 +846,12 @@ export function Session() {
             const filename = options.filename.trim()
             const filepath = path.join(exportDir, filename)
 
-            await Bun.write(filepath, transcript)
+            await writeFile(filepath, transcript)
 
             // Open with EDITOR if available
             const result = await Editor.open({ value: transcript, renderer })
             if (result !== undefined) {
-              await Bun.write(filepath, result)
+              await writeFile(filepath, result)
             }
 
             toast.show({ message: `Session exported to ${filename}`, variant: "success" })

@@ -1,5 +1,6 @@
-import { readableStreamToText } from "bun"
-import { BunProc } from "../bun"
+import { readJSON, readText } from "@/util/fs-extra"
+import { which } from "@/util/which"
+import { DenoProc } from "../deno"
 import { Instance } from "../project/instance"
 import { Filesystem } from "../util/filesystem"
 import { Flag } from "@/flag/flag"
@@ -17,7 +18,7 @@ export const gofmt: Info = {
   command: ["gofmt", "-w", "$FILE"],
   extensions: [".go"],
   async enabled() {
-    return Bun.which("gofmt") !== null
+    return which("gofmt") !== null
   },
 }
 
@@ -26,13 +27,13 @@ export const mix: Info = {
   command: ["mix", "format", "$FILE"],
   extensions: [".ex", ".exs", ".eex", ".heex", ".leex", ".neex", ".sface"],
   async enabled() {
-    return Bun.which("mix") !== null
+    return which("mix") !== null
   },
 }
 
 export const prettier: Info = {
   name: "prettier",
-  command: [BunProc.which(), "x", "prettier", "--write", "$FILE"],
+  command: [DenoProc.which(), "x", "prettier", "--write", "$FILE"],
   environment: {
     BUN_BE_BUN: "1",
   },
@@ -67,7 +68,7 @@ export const prettier: Info = {
   async enabled() {
     const items = await Filesystem.findUp("package.json", Instance.directory, Instance.worktree)
     for (const item of items) {
-      const json = await Bun.file(item).json()
+      const json = await readJSON(item)
       if (json.dependencies?.prettier) return true
       if (json.devDependencies?.prettier) return true
     }
@@ -77,7 +78,7 @@ export const prettier: Info = {
 
 export const oxfmt: Info = {
   name: "oxfmt",
-  command: [BunProc.which(), "x", "oxfmt", "$FILE"],
+  command: [DenoProc.which(), "x", "oxfmt", "$FILE"],
   environment: {
     BUN_BE_BUN: "1",
   },
@@ -86,7 +87,7 @@ export const oxfmt: Info = {
     if (!Flag.OPENCODE_EXPERIMENTAL_OXFMT) return false
     const items = await Filesystem.findUp("package.json", Instance.directory, Instance.worktree)
     for (const item of items) {
-      const json = await Bun.file(item).json()
+      const json = await readJSON(item)
       if (json.dependencies?.oxfmt) return true
       if (json.devDependencies?.oxfmt) return true
     }
@@ -96,7 +97,7 @@ export const oxfmt: Info = {
 
 export const biome: Info = {
   name: "biome",
-  command: [BunProc.which(), "x", "@biomejs/biome", "check", "--write", "$FILE"],
+  command: [DenoProc.which(), "x", "@biomejs/biome", "check", "--write", "$FILE"],
   environment: {
     BUN_BE_BUN: "1",
   },
@@ -145,7 +146,7 @@ export const zig: Info = {
   command: ["zig", "fmt", "$FILE"],
   extensions: [".zig", ".zon"],
   async enabled() {
-    return Bun.which("zig") !== null
+    return which("zig") !== null
   },
 }
 
@@ -164,7 +165,7 @@ export const ktlint: Info = {
   command: ["ktlint", "-F", "$FILE"],
   extensions: [".kt", ".kts"],
   async enabled() {
-    return Bun.which("ktlint") !== null
+    return which("ktlint") !== null
   },
 }
 
@@ -173,13 +174,13 @@ export const ruff: Info = {
   command: ["ruff", "format", "$FILE"],
   extensions: [".py", ".pyi"],
   async enabled() {
-    if (!Bun.which("ruff")) return false
+    if (!which("ruff")) return false
     const configs = ["pyproject.toml", "ruff.toml", ".ruff.toml"]
     for (const config of configs) {
       const found = await Filesystem.findUp(config, Instance.directory, Instance.worktree)
       if (found.length > 0) {
         if (config === "pyproject.toml") {
-          const content = await Bun.file(found[0]).text()
+          const content = await readText(found[0])
           if (content.includes("[tool.ruff]")) return true
         } else {
           return true
@@ -190,7 +191,7 @@ export const ruff: Info = {
     for (const dep of deps) {
       const found = await Filesystem.findUp(dep, Instance.directory, Instance.worktree)
       if (found.length > 0) {
-        const content = await Bun.file(found[0]).text()
+        const content = await readText(found[0])
         if (content.includes("ruff")) return true
       }
     }
@@ -203,16 +204,18 @@ export const rlang: Info = {
   command: ["air", "format", "$FILE"],
   extensions: [".R"],
   async enabled() {
-    const airPath = Bun.which("air")
+    const airPath = which("air")
     if (airPath == null) return false
 
     try {
-      const proc = Bun.spawn(["air", "--help"], {
-        stdout: "pipe",
-        stderr: "pipe",
+      const command = new Deno.Command("air", {
+        args: ["--help"],
+        stdin: "null",
+        stdout: "piped",
+        stderr: "piped",
       })
-      await proc.exited
-      const output = await readableStreamToText(proc.stdout)
+      const proc = await command.output()
+      const output = new TextDecoder().decode(proc.stdout)
 
       // Check for "Air: An R language server and formatter"
       const firstLine = output.split("\n")[0]
@@ -231,10 +234,15 @@ export const uvformat: Info = {
   extensions: [".py", ".pyi"],
   async enabled() {
     if (await ruff.enabled()) return false
-    if (Bun.which("uv") !== null) {
-      const proc = Bun.spawn(["uv", "format", "--help"], { stderr: "pipe", stdout: "pipe" })
-      const code = await proc.exited
-      return code === 0
+    if (which("uv") !== null) {
+      const command = new Deno.Command("uv", {
+        args: ["format", "--help"],
+        stdin: "null",
+        stdout: "piped",
+        stderr: "piped",
+      })
+      const proc = await command.output()
+      return proc.code === 0
     }
     return false
   },
@@ -245,7 +253,7 @@ export const rubocop: Info = {
   command: ["rubocop", "--autocorrect", "$FILE"],
   extensions: [".rb", ".rake", ".gemspec", ".ru"],
   async enabled() {
-    return Bun.which("rubocop") !== null
+    return which("rubocop") !== null
   },
 }
 
@@ -254,7 +262,7 @@ export const standardrb: Info = {
   command: ["standardrb", "--fix", "$FILE"],
   extensions: [".rb", ".rake", ".gemspec", ".ru"],
   async enabled() {
-    return Bun.which("standardrb") !== null
+    return which("standardrb") !== null
   },
 }
 
@@ -263,7 +271,7 @@ export const htmlbeautifier: Info = {
   command: ["htmlbeautifier", "$FILE"],
   extensions: [".erb", ".html.erb"],
   async enabled() {
-    return Bun.which("htmlbeautifier") !== null
+    return which("htmlbeautifier") !== null
   },
 }
 
@@ -272,7 +280,7 @@ export const dart: Info = {
   command: ["dart", "format", "$FILE"],
   extensions: [".dart"],
   async enabled() {
-    return Bun.which("dart") !== null
+    return which("dart") !== null
   },
 }
 
@@ -281,7 +289,7 @@ export const ocamlformat: Info = {
   command: ["ocamlformat", "-i", "$FILE"],
   extensions: [".ml", ".mli"],
   async enabled() {
-    if (!Bun.which("ocamlformat")) return false
+    if (!which("ocamlformat")) return false
     const items = await Filesystem.findUp(".ocamlformat", Instance.directory, Instance.worktree)
     return items.length > 0
   },
@@ -292,7 +300,7 @@ export const terraform: Info = {
   command: ["terraform", "fmt", "$FILE"],
   extensions: [".tf", ".tfvars"],
   async enabled() {
-    return Bun.which("terraform") !== null
+    return which("terraform") !== null
   },
 }
 
@@ -301,7 +309,7 @@ export const latexindent: Info = {
   command: ["latexindent", "-w", "-s", "$FILE"],
   extensions: [".tex"],
   async enabled() {
-    return Bun.which("latexindent") !== null
+    return which("latexindent") !== null
   },
 }
 
@@ -310,7 +318,7 @@ export const gleam: Info = {
   command: ["gleam", "format", "$FILE"],
   extensions: [".gleam"],
   async enabled() {
-    return Bun.which("gleam") !== null
+    return which("gleam") !== null
   },
 }
 
@@ -319,7 +327,7 @@ export const shfmt: Info = {
   command: ["shfmt", "-w", "$FILE"],
   extensions: [".sh", ".bash"],
   async enabled() {
-    return Bun.which("shfmt") !== null
+    return which("shfmt") !== null
   },
 }
 
@@ -328,7 +336,7 @@ export const nixfmt: Info = {
   command: ["nixfmt", "$FILE"],
   extensions: [".nix"],
   async enabled() {
-    return Bun.which("nixfmt") !== null
+    return which("nixfmt") !== null
   },
 }
 
@@ -337,7 +345,7 @@ export const rustfmt: Info = {
   command: ["rustfmt", "$FILE"],
   extensions: [".rs"],
   async enabled() {
-    return Bun.which("rustfmt") !== null
+    return which("rustfmt") !== null
   },
 }
 
@@ -348,7 +356,7 @@ export const pint: Info = {
   async enabled() {
     const items = await Filesystem.findUp("composer.json", Instance.directory, Instance.worktree)
     for (const item of items) {
-      const json = await Bun.file(item).json()
+      const json = await readJSON(item)
       if (json.require?.["laravel/pint"]) return true
       if (json["require-dev"]?.["laravel/pint"]) return true
     }
@@ -361,6 +369,6 @@ export const ormolu: Info = {
   command: ["ormolu", "-i", "$FILE"],
   extensions: [".hs"],
   async enabled() {
-    return Bun.which("ormolu") !== null
+    return which("ormolu") !== null
   },
 }

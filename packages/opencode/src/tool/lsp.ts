@@ -6,6 +6,7 @@ import DESCRIPTION from "./lsp.txt"
 import { Instance } from "../project/instance"
 import { pathToFileURL } from "url"
 import { assertExternalDirectory } from "./external-directory"
+import { exists } from "@/util/fs-extra"
 
 const operations = [
   "goToDefinition",
@@ -47,8 +48,8 @@ export const LspTool = Tool.define("lsp", {
     const relPath = path.relative(Instance.worktree, file)
     const title = `${args.operation} ${relPath}:${args.line}:${args.character}`
 
-    const exists = await Bun.file(file).exists()
-    if (!exists) {
+    const fileExists = await exists(file)
+    if (!fileExists) {
       throw new Error(`File not found: ${file}`)
     }
 

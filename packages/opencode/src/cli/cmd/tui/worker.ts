@@ -8,9 +8,11 @@ import { upgrade } from "@/cli/upgrade"
 import { Config } from "@/config/config"
 import { GlobalBus } from "@/bus/global"
 import { createOpencodeClient, type Event } from "@opencode-ai/sdk/v2"
-import type { BunWebSocketData } from "hono/bun"
+import { sleep } from "@/util/shell"
 import { Flag } from "@/flag/flag"
+import { Global } from "@/global"
 
+await Global.init()
 await Log.init({
   print: process.argv.includes("--print-logs"),
   dev: Installation.isLocal(),
@@ -22,13 +24,13 @@ await Log.init({
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
-    e: e instanceof Error ? e.message : e,
+    e: e instanceof Error ? e.stack || e.message : e,
   })
 })
 
 process.on("uncaughtException", (e) => {
   Log.Default.error("exception", {
-    e: e instanceof Error ? e.message : e,
+    e: e instanceof Error ? e.stack || e.message : e,
   })
 })
 
@@ -37,7 +39,7 @@ GlobalBus.on("event", (event) => {
   Rpc.emit("global.event", event)
 })
 
-let server: Bun.Server<BunWebSocketData> | undefined
+let server: ReturnType<typeof Server.listen> | undefined
 
 const eventStream = {
   abort: undefined as AbortController | undefined,
@@ -75,7 +77,7 @@ const startEventStream = (directory: string) => {
       ).catch(() => undefined)
 
       if (!events) {
-        await Bun.sleep(250)
+        await sleep(250)
         continue
       }
 
@@ -84,7 +86,7 @@ const startEventStream = (directory: string) => {
       }
 
       if (!signal.aborted) {
-        await Bun.sleep(250)
+        await sleep(250)
       }
     }
   })().catch((error) => {
@@ -93,8 +95,6 @@ const startEventStream = (directory: string) => {
     })
   })
 }
-
-startEventStream(process.cwd())
 
 export const rpc = {
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
@@ -119,7 +119,7 @@ export const rpc = {
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     if (server) await server.stop(true)
     server = Server.listen(input)
-    return { url: server.url.toString() }
+    return { url: Server.url().toString() }
   },
   async checkUpgrade(input: { directory: string }) {
     await Instance.provide({
@@ -143,6 +143,8 @@ export const rpc = {
 }
 
 Rpc.listen(rpc)
+Rpc.emit("ready", true)
+startEventStream(process.cwd())
 
 function getAuthorizationHeader(): string | undefined {
   const password = Flag.OPENCODE_SERVER_PASSWORD

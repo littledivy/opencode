@@ -29,7 +29,8 @@ import {
 } from "@agentclientprotocol/sdk"
 
 import { Log } from "../util/log"
-import { pathToFileURL } from "bun"
+import { pathToFileURL } from "node:url"
+import { readText } from "../util/fs-extra"
 import { ACPSessionManager } from "./session"
 import type { ACPConfig } from "./types"
 import { Provider } from "../provider/provider"
@@ -228,8 +229,7 @@ export namespace ACP {
                 const metadata = permission.metadata || {}
                 const filepath = typeof metadata["filepath"] === "string" ? metadata["filepath"] : ""
                 const diff = typeof metadata["diff"] === "string" ? metadata["diff"] : ""
-                const file = Bun.file(filepath)
-                const content = (await file.exists()) ? await file.text() : ""
+                const content = await readText(filepath).catch(() => "")
                 const newContent = getNewContent(content, diff)
 
                 if (newContent) {

@@ -6,6 +6,7 @@ import { SplitBorder } from "../component/border"
 import { TextAttributes } from "@opentui/core"
 import z from "zod"
 import { TuiEvent } from "../event"
+import { setTimeout } from "node:timers"
 
 export type ToastOptions = z.infer<typeof TuiEvent.ToastShow.properties>
 

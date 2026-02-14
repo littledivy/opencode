@@ -1,15 +1,12 @@
-/// <reference path="../env.d.ts" />
-// import { Octokit } from "@octokit/rest"
-import { tool } from "@opencode-ai/plugin"
-import DESCRIPTION from "./github-triage.txt"
+const DESCRIPTION = Deno.readTextFileSync(new URL("./github-triage.txt", import.meta.url))
 
-function getIssueNumber(): number {
+function getIssueNumber() {
   const issue = parseInt(process.env.ISSUE_NUMBER ?? "", 10)
   if (!issue) throw new Error("ISSUE_NUMBER env var not set")
   return issue
 }
 
-async function githubFetch(endpoint: string, options: RequestInit = {}) {
+async function githubFetch(endpoint, options = {}) {
   const response = await fetch(`https://api.github.com${endpoint}`, {
     ...options,
     headers: {
@@ -25,66 +22,41 @@ async function githubFetch(endpoint: string, options: RequestInit = {}) {
   return response.json()
 }
 
-export default tool({
+export default {
   description: DESCRIPTION,
-  args: {
-    assignee: tool.schema
-      .enum(["thdxr", "adamdotdevin", "rekram1-node", "fwang", "jayair", "kommander"])
-      .describe("The username of the assignee")
-      .default("rekram1-node"),
-    labels: tool.schema
-      .array(tool.schema.enum(["nix", "opentui", "perf", "desktop", "zen", "docs", "windows"]))
-      .describe("The labels(s) to add to the issue")
-      .default([]),
-  },
-  async execute(args) {
+  args: {},
+  async execute(args = {}) {
     const issue = getIssueNumber()
-    // const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN })
     const owner = "anomalyco"
     const repo = "opencode"
+    const results = []
+    const assignee = args.assignee ?? "rekram1-node"
+    const labels = (Array.isArray(args.labels) ? args.labels : []).map((label) => (label === "desktop" ? "web" : label))
 
-    const results: string[] = []
-
-    if (args.assignee === "adamdotdevin" && !args.labels.includes("desktop")) {
+    if (assignee === "adamdotdevin" && !labels.includes("web")) {
       throw new Error("Only desktop issues should be assigned to adamdotdevin")
     }
-
-    if (args.assignee === "fwang" && !args.labels.includes("zen")) {
+    if (assignee === "fwang" && !labels.includes("zen")) {
       throw new Error("Only zen issues should be assigned to fwang")
     }
-
-    if (args.assignee === "kommander" && !args.labels.includes("opentui")) {
+    if (assignee === "kommander" && !labels.includes("opentui")) {
       throw new Error("Only opentui issues should be assigned to kommander")
     }
 
-    // await octokit.rest.issues.addAssignees({
-    //   owner,
-    //   repo,
-    //   issue_number: issue,
-    //   assignees: [args.assignee],
-    // })
     await githubFetch(`/repos/${owner}/${repo}/issues/${issue}/assignees`, {
       method: "POST",
-      body: JSON.stringify({ assignees: [args.assignee] }),
+      body: JSON.stringify({ assignees: [assignee] }),
     })
-    results.push(`Assigned @${args.assignee} to issue #${issue}`)
-
-    const labels: string[] = args.labels.map((label) => (label === "desktop" ? "web" : label))
+    results.push(`Assigned @${assignee} to issue #${issue}`)
 
     if (labels.length > 0) {
-      // await octokit.rest.issues.addLabels({
-      //   owner,
-      //   repo,
-      //   issue_number: issue,
-      //   labels,
-      // })
       await githubFetch(`/repos/${owner}/${repo}/issues/${issue}/labels`, {
         method: "POST",
         body: JSON.stringify({ labels }),
       })
-      results.push(`Added labels: ${args.labels.join(", ")}`)
+      results.push(`Added labels: ${labels.join(", ")}`)
     }
 
     return results.join("\n")
   },
-})
+}

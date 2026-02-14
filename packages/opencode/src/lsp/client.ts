@@ -5,6 +5,7 @@ import { pathToFileURL, fileURLToPath } from "url"
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
 import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types"
 import { Log } from "../util/log"
+import { readText } from "../util/fs-extra"
 import { LANGUAGE_EXTENSIONS } from "./language"
 import z from "zod"
 import type { LSPServer } from "./server"
@@ -147,8 +148,7 @@ export namespace LSPClient {
       notify: {
         async open(input: { path: string }) {
           input.path = path.isAbsolute(input.path) ? input.path : path.resolve(Instance.directory, input.path)
-          const file = Bun.file(input.path)
-          const text = await file.text()
+          const text = await readText(input.path)
           const extension = path.extname(input.path)
           const languageId = LANGUAGE_EXTENSIONS[extension] ?? "plaintext"
 

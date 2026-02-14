@@ -1,4 +1,4 @@
-import { $ } from "bun"
+import { $ } from "../util/shell"
 import fs from "fs/promises"
 import path from "path"
 import z from "zod"

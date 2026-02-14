@@ -43,15 +43,17 @@ export const GrepTool = Tool.define("grep", {
     }
     args.push(searchPath)
 
-    const proc = Bun.spawn([rgPath, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
+    const command = new Deno.Command(rgPath, {
+      args,
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
       signal: ctx.abort,
     })
-
-    const output = await new Response(proc.stdout).text()
-    const errorOutput = await new Response(proc.stderr).text()
-    const exitCode = await proc.exited
+    const proc = await command.output()
+    const exitCode = proc.code
+    const output = new TextDecoder().decode(proc.stdout)
+    const errorOutput = new TextDecoder().decode(proc.stderr)
 
     // Exit codes: 0 = matches found, 1 = no matches, 2 = errors (but may still have matches)
     // With --no-messages, we suppress error output but still get exit code 2 for broken symlinks etc.
@@ -83,13 +85,12 @@ export const GrepTool = Tool.define("grep", {
       const lineNum = parseInt(lineNumStr, 10)
       const lineText = lineTextParts.join("|")
 
-      const file = Bun.file(filePath)
-      const stats = await file.stat().catch(() => null)
+      const stats = await Deno.stat(filePath).catch(() => null)
       if (!stats) continue
 
       matches.push({
         path: filePath,
-        modTime: stats.mtime.getTime(),
+        modTime: stats.mtime?.getTime() ?? 0,
         lineNum,
         lineText,
       })

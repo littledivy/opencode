@@ -27,13 +27,14 @@ import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
 import { PlanExitTool, PlanEnterTool } from "./plan"
 import { ApplyPatchTool } from "./apply_patch"
+import { Glob } from "@/util/glob"
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
 
   export const state = Instance.state(async () => {
     const custom = [] as Tool.Info[]
-    const glob = new Bun.Glob("{tool,tools}/*.{js,ts}")
+    const glob = new Glob("{tool,tools}/*.{js,ts}")
 
     const matches = await Config.directories().then((dirs) =>
       dirs.flatMap((dir) => [...glob.scanSync({ cwd: dir, absolute: true, followSymlinks: true, dot: true })]),

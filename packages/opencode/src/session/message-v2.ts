@@ -9,7 +9,7 @@ import { fn } from "@/util/fn"
 import { Storage } from "@/storage/storage"
 import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
-import { type SystemError } from "bun"
+type SystemError = NodeJS.ErrnoException
 import type { Provider } from "@/provider/provider"
 
 export namespace MessageV2 {
@@ -733,7 +733,7 @@ export namespace MessageV2 {
     },
   )
 
-  export async function filterCompacted(stream: AsyncIterable<MessageV2.WithParts>) {
+  export async function filterCompacted(stream: AsyncIterable<MessageV2.WithParts> | Iterable<MessageV2.WithParts>) {
     const result = [] as MessageV2.WithParts[]
     const completed = new Set<string>()
     for await (const msg of stream) {

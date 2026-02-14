@@ -21,16 +21,18 @@ import {
 } from "jsonc-parser"
 import { Instance } from "../project/instance"
 import { LSPServer } from "../lsp/server"
-import { BunProc } from "@/bun"
+import { DenoProc } from "@/deno"
 import { Installation } from "@/installation"
 import { ConfigMarkdown } from "./markdown"
 import { constants, existsSync } from "fs"
 import { Bus } from "@/bus"
 import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
-import { PackageRegistry } from "@/bun/registry"
+import { PackageRegistry } from "@/deno/registry"
 import { proxied } from "@/util/proxied"
 import { iife } from "@/util/iife"
+import { readText, readJSON, writeFile, exists } from "../util/fs-extra"
+import { Glob } from "../util/glob"
 
 export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
@@ -255,31 +257,36 @@ export namespace Config {
     await Promise.all(deps)
   }
 
+  function pluginTargetVersion() {
+    if (Installation.isLocal()) return "*"
+    if (Installation.VERSION.includes("-dev-")) return "latest"
+    return Installation.VERSION
+  }
+
   export async function installDependencies(dir: string) {
     const pkg = path.join(dir, "package.json")
-    const targetVersion = Installation.isLocal() ? "*" : Installation.VERSION
+    const targetVersion = pluginTargetVersion()
 
-    const json = await Bun.file(pkg)
-      .json()
+    const json = await readJSON(pkg)
       .catch(() => ({}))
     json.dependencies = {
       ...json.dependencies,
       "@opencode-ai/plugin": targetVersion,
     }
-    await Bun.write(pkg, JSON.stringify(json, null, 2))
-    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await writeFile(pkg, JSON.stringify(json, null, 2))
 
     const gitignore = path.join(dir, ".gitignore")
-    const hasGitIgnore = await Bun.file(gitignore).exists()
-    if (!hasGitIgnore) await Bun.write(gitignore, ["node_modules", "package.json", "bun.lock", ".gitignore"].join("\n"))
+    const hasGitIgnore = await exists(gitignore)
+    if (!hasGitIgnore) await writeFile(gitignore, ["node_modules", "package.json", "bun.lock", ".gitignore"].join("\n"))
 
     // Install any additional dependencies defined in the package.json
     // This allows local plugins and custom tools to use external packages
-    await BunProc.run(
+    const isDeno = DenoProc.which().includes("deno")
+    await DenoProc.run(
       [
         "install",
         // TODO: get rid of this case (see: https://github.com/oven-sh/bun/issues/19936)
-        ...(proxied() ? ["--no-cache"] : []),
+        ...(!isDeno && proxied() ? ["--no-cache"] : []),
       ],
       { cwd: dir },
     ).catch(() => {})
@@ -307,17 +314,17 @@ export namespace Config {
     if (!existsSync(nodeModules)) return true
 
     const pkg = path.join(dir, "package.json")
-    const pkgFile = Bun.file(pkg)
-    const pkgExists = await pkgFile.exists()
+    const pkgExists = await exists(pkg)
     if (!pkgExists) return true
 
-    const parsed = await pkgFile.json().catch(() => null)
+    const parsed = await readJSON(pkg).catch(() => null)
     const dependencies = parsed?.dependencies ?? {}
     const depVersion = dependencies["@opencode-ai/plugin"]
     if (!depVersion) return true
 
-    const targetVersion = Installation.isLocal() ? "latest" : Installation.VERSION
+    const targetVersion = pluginTargetVersion()
     if (targetVersion === "latest") {
+      if (depVersion === "latest") return false
       const isOutdated = await PackageRegistry.isOutdated("@opencode-ai/plugin", depVersion, dir)
       if (!isOutdated) return false
       log.info("Cached version is outdated, proceeding with install", {
@@ -343,7 +350,7 @@ export namespace Config {
     return ext.length ? file.slice(0, -ext.length) : file
   }
 
-  const COMMAND_GLOB = new Bun.Glob("{command,commands}/**/*.md")
+  const COMMAND_GLOB = new Glob("{command,commands}/**/*.md")
   async function loadCommand(dir: string) {
     const result: Record<string, Command> = {}
     for await (const item of COMMAND_GLOB.scan({
@@ -382,7 +389,7 @@ export namespace Config {
     return result
   }
 
-  const AGENT_GLOB = new Bun.Glob("{agent,agents}/**/*.md")
+  const AGENT_GLOB = new Glob("{agent,agents}/**/*.md")
   async function loadAgent(dir: string) {
     const result: Record<string, Agent> = {}
 
@@ -422,7 +429,7 @@ export namespace Config {
     return result
   }
 
-  const MODE_GLOB = new Bun.Glob("{mode,modes}/*.md")
+  const MODE_GLOB = new Glob("{mode,modes}/*.md")
   async function loadMode(dir: string) {
     const result: Record<string, Agent> = {}
     for await (const item of MODE_GLOB.scan({
@@ -459,7 +466,7 @@ export namespace Config {
     return result
   }
 
-  const PLUGIN_GLOB = new Bun.Glob("{plugin,plugins}/*.{ts,js}")
+  const PLUGIN_GLOB = new Glob("{plugin,plugins}/*.{ts,js}")
   async function loadPlugin(dir: string) {
     const plugins: string[] = []
 
@@ -1224,7 +1231,7 @@ export namespace Config {
           if (provider && model) result.model = `${provider}/${model}`
           result["$schema"] = "https://opencode.ai/config.json"
           result = mergeDeep(result, rest)
-          await Bun.write(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
+          await writeFile(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
           await fs.unlink(legacy)
         })
         .catch(() => {})
@@ -1235,8 +1242,7 @@ export namespace Config {
 
   async function loadFile(filepath: string): Promise<Info> {
     log.info("loading", { path: filepath })
-    let text = await Bun.file(filepath)
-      .text()
+    let text = await readText(filepath)
       .catch((err) => {
         if (err.code === "ENOENT") return
         throw new JsonError({ path: filepath }, { cause: err })
@@ -1267,8 +1273,7 @@ export namespace Config {
         }
         const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath)
         const fileContent = (
-          await Bun.file(resolvedPath)
-            .text()
+          await readText(resolvedPath)
             .catch((error) => {
               const errMsg = `bad file reference: "${match}"`
               if (error.code === "ENOENT") {
@@ -1318,7 +1323,7 @@ export namespace Config {
         parsed.data.$schema = "https://opencode.ai/config.json"
         // Write the $schema to the original text to preserve variables like {env:VAR}
         const updated = original.replace(/^\s*\{/, '{\n  "$schema": "https://opencode.ai/config.json",')
-        await Bun.write(configFilepath, updated).catch(() => {})
+        await writeFile(configFilepath, updated).catch(() => {})
       }
       const data = parsed.data
       if (data.plugin) {
@@ -1374,7 +1379,7 @@ export namespace Config {
   export async function update(config: Info) {
     const filepath = path.join(Instance.directory, "config.json")
     const existing = await loadFile(filepath)
-    await Bun.write(filepath, JSON.stringify(mergeDeep(existing, config), null, 2))
+    await writeFile(filepath, JSON.stringify(mergeDeep(existing, config), null, 2))
     await Instance.dispose()
   }
 
@@ -1445,8 +1450,7 @@ export namespace Config {
 
   export async function updateGlobal(config: Info) {
     const filepath = globalConfigFile()
-    const before = await Bun.file(filepath)
-      .text()
+    const before = await readText(filepath)
       .catch((err) => {
         if (err.code === "ENOENT") return "{}"
         throw new JsonError({ path: filepath }, { cause: err })
@@ -1456,13 +1460,13 @@ export namespace Config {
       if (!filepath.endsWith(".jsonc")) {
         const existing = parseConfig(before, filepath)
         const merged = mergeDeep(existing, config)
-        await Bun.write(filepath, JSON.stringify(merged, null, 2))
+        await writeFile(filepath, JSON.stringify(merged, null, 2))
         return merged
       }
 
       const updated = patchJsonc(before, config)
       const merged = parseConfig(updated, filepath)
-      await Bun.write(filepath, updated)
+      await writeFile(filepath, updated)
       return merged
     })()
 

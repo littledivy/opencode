@@ -17,6 +17,7 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectory } from "./external-directory"
+import { exists, readText, writeFile } from "@/util/fs-extra"
 
 const MAX_DIAGNOSTICS_PER_FILE = 20
 
@@ -49,7 +50,7 @@ export const EditTool = Tool.define("edit", {
     let contentNew = ""
     await FileTime.withLock(filePath, async () => {
       if (params.oldString === "") {
-        const existed = await Bun.file(filePath).exists()
+        const existed = await exists(filePath)
         contentNew = params.newString
         diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
         await ctx.ask({
@@ -61,7 +62,7 @@ export const EditTool = Tool.define("edit", {
             diff,
           },
         })
-        await Bun.write(filePath, params.newString)
+        await writeFile(filePath, params.newString)
         await Bus.publish(File.Event.Edited, {
           file: filePath,
         })
@@ -73,12 +74,11 @@ export const EditTool = Tool.define("edit", {
         return
       }
 
-      const file = Bun.file(filePath)
-      const stats = await file.stat().catch(() => {})
+      const stats = await Deno.stat(filePath).catch(() => undefined)
       if (!stats) throw new Error(`File ${filePath} not found`)
-      if (stats.isDirectory()) throw new Error(`Path is a directory, not a file: ${filePath}`)
+      if (stats.isDirectory) throw new Error(`Path is a directory, not a file: ${filePath}`)
       await FileTime.assert(ctx.sessionID, filePath)
-      contentOld = await file.text()
+      contentOld = await readText(filePath)
       contentNew = replace(contentOld, params.oldString, params.newString, params.replaceAll)
 
       diff = trimDiff(
@@ -94,7 +94,7 @@ export const EditTool = Tool.define("edit", {
         },
       })
 
-      await file.write(contentNew)
+      await writeFile(filePath, contentNew)
       await Bus.publish(File.Event.Edited, {
         file: filePath,
       })
@@ -102,7 +102,7 @@ export const EditTool = Tool.define("edit", {
         file: filePath,
         event: "change",
       })
-      contentNew = await file.text()
+      contentNew = await readText(filePath)
       diff = trimDiff(
         createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
       )

@@ -3,6 +3,7 @@ import { Log } from "../util/log"
 import { Installation } from "../installation"
 import { Auth, OAUTH_DUMMY_KEY } from "../auth"
 import os from "os"
+import { sleep } from "@/util/shell"
 import { ProviderTransform } from "@/provider/transform"
 
 const log = Log.create({ service: "plugin.codex" })
@@ -239,7 +240,7 @@ interface PendingOAuth {
   reject: (error: Error) => void
 }
 
-let oauthServer: ReturnType<typeof Bun.serve> | undefined
+let oauthServer: Deno.HttpServer | undefined
 let pendingOAuth: PendingOAuth | undefined
 
 async function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
@@ -247,66 +248,53 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
     return { port: OAUTH_PORT, redirectUri: `http://localhost:${OAUTH_PORT}/auth/callback` }
   }
 
-  oauthServer = Bun.serve({
-    port: OAUTH_PORT,
-    fetch(req) {
-      const url = new URL(req.url)
+  oauthServer = Deno.serve({ port: OAUTH_PORT, onListen: () => {} }, (req) => {
+    const url = new URL(req.url)
 
-      if (url.pathname === "/auth/callback") {
-        const code = url.searchParams.get("code")
-        const state = url.searchParams.get("state")
-        const error = url.searchParams.get("error")
-        const errorDescription = url.searchParams.get("error_description")
+    if (url.pathname === "/auth/callback") {
+      const code = url.searchParams.get("code")
+      const state = url.searchParams.get("state")
+      const error = url.searchParams.get("error")
+      const errorDescription = url.searchParams.get("error_description")
 
-        if (error) {
-          const errorMsg = errorDescription || error
-          pendingOAuth?.reject(new Error(errorMsg))
-          pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
-            headers: { "Content-Type": "text/html" },
-          })
-        }
-
-        if (!code) {
-          const errorMsg = "Missing authorization code"
-          pendingOAuth?.reject(new Error(errorMsg))
-          pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
-            status: 400,
-            headers: { "Content-Type": "text/html" },
-          })
-        }
-
-        if (!pendingOAuth || state !== pendingOAuth.state) {
-          const errorMsg = "Invalid state - potential CSRF attack"
-          pendingOAuth?.reject(new Error(errorMsg))
-          pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
-            status: 400,
-            headers: { "Content-Type": "text/html" },
-          })
-        }
-
-        const current = pendingOAuth
+      if (error) {
+        const errorMsg = errorDescription || error
+        pendingOAuth?.reject(new Error(errorMsg))
         pendingOAuth = undefined
-
-        exchangeCodeForTokens(code, `http://localhost:${OAUTH_PORT}/auth/callback`, current.pkce)
-          .then((tokens) => current.resolve(tokens))
-          .catch((err) => current.reject(err))
-
-        return new Response(HTML_SUCCESS, {
-          headers: { "Content-Type": "text/html" },
-        })
+        return new Response(HTML_ERROR(errorMsg), { status: 200, headers: { "Content-Type": "text/html" } })
       }
 
-      if (url.pathname === "/cancel") {
-        pendingOAuth?.reject(new Error("Login cancelled"))
+      if (!code) {
+        const errorMsg = "Missing authorization code"
+        pendingOAuth?.reject(new Error(errorMsg))
         pendingOAuth = undefined
-        return new Response("Login cancelled", { status: 200 })
+        return new Response(HTML_ERROR(errorMsg), { status: 400, headers: { "Content-Type": "text/html" } })
       }
 
-      return new Response("Not found", { status: 404 })
-    },
+      if (!pendingOAuth || state !== pendingOAuth.state) {
+        const errorMsg = "Invalid state - potential CSRF attack"
+        pendingOAuth?.reject(new Error(errorMsg))
+        pendingOAuth = undefined
+        return new Response(HTML_ERROR(errorMsg), { status: 400, headers: { "Content-Type": "text/html" } })
+      }
+
+      const current = pendingOAuth
+      pendingOAuth = undefined
+
+      exchangeCodeForTokens(code, `http://localhost:${OAUTH_PORT}/auth/callback`, current.pkce)
+        .then((tokens) => current.resolve(tokens))
+        .catch((err) => current.reject(err))
+
+      return new Response(HTML_SUCCESS, { status: 200, headers: { "Content-Type": "text/html" } })
+    }
+
+    if (url.pathname === "/cancel") {
+      pendingOAuth?.reject(new Error("Login cancelled"))
+      pendingOAuth = undefined
+      return new Response("Login cancelled", { status: 200 })
+    }
+
+    return new Response("Not found", { status: 404 })
   })
 
   log.info("codex oauth server started", { port: OAUTH_PORT })
@@ -315,7 +303,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
 
 function stopOAuthServer() {
   if (oauthServer) {
-    oauthServer.stop()
+    oauthServer.shutdown()
     oauthServer = undefined
     log.info("codex oauth server stopped")
   }
@@ -602,7 +590,7 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
                     return { type: "failed" as const }
                   }
 
-                  await Bun.sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
+                  await sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
                 }
               },
             }

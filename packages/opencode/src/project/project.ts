@@ -1,5 +1,4 @@
 import z from "zod"
-import fs from "fs/promises"
 import { Filesystem } from "../util/filesystem"
 import path from "path"
 import { Storage } from "../storage/storage"
@@ -13,6 +12,9 @@ import { iife } from "@/util/iife"
 import { GlobalBus } from "@/bus/global"
 import { existsSync } from "fs"
 import { git } from "../util/git"
+import { which } from "../util/which"
+import { readText, writeFile, exists } from "../util/fs-extra"
+import { Glob } from "../util/glob"
 
 export namespace Project {
   const log = Log.create({ service: "project" })
@@ -60,11 +62,10 @@ export namespace Project {
       if (dotgit) {
         let sandbox = path.dirname(dotgit)
 
-        const gitBinary = Bun.which("git")
+        const gitBinary = which("git")
 
         // cached id calculation
-        let id = await Bun.file(path.join(dotgit, "opencode"))
-          .text()
+        let id = await readText(path.join(dotgit, "opencode"))
           .then((x) => x.trim())
           .catch(() => undefined)
 
@@ -102,8 +103,7 @@ export namespace Project {
 
           id = roots[0]
           if (id) {
-            void Bun.file(path.join(dotgit, "opencode"))
-              .write(id)
+            void writeFile(path.join(dotgit, "opencode"), id)
               .catch(() => undefined)
           }
         }
@@ -216,7 +216,7 @@ export namespace Project {
     if (input.vcs !== "git") return
     if (input.icon?.override) return
     if (input.icon?.url) return
-    const glob = new Bun.Glob("**/{favicon}.{ico,png,svg,jpg,jpeg,webp}")
+    const glob = new Glob("**/{favicon}.{ico,png,svg,jpg,jpeg,webp}")
     const matches = await Array.fromAsync(
       glob.scan({
         cwd: input.worktree,
@@ -228,10 +228,11 @@ export namespace Project {
     )
     const shortest = matches.sort((a, b) => a.length - b.length)[0]
     if (!shortest) return
-    const file = Bun.file(shortest)
-    const buffer = await file.arrayBuffer()
-    const base64 = Buffer.from(buffer).toString("base64")
-    const mime = file.type || "image/png"
+    const buffer = await Deno.readFile(shortest)
+    const base64 = btoa(String.fromCharCode(...buffer))
+    const ext = path.extname(shortest).toLowerCase().slice(1)
+    const mimeMap: Record<string, string> = { ico: "image/x-icon", png: "image/png", svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp" }
+    const mime = mimeMap[ext] || "image/png"
     const url = `data:${mime};base64,${base64}`
     await update({
       projectID: input.id,
@@ -326,8 +327,8 @@ export namespace Project {
     if (!project?.sandboxes) return []
     const valid: string[] = []
     for (const dir of project.sandboxes) {
-      const stat = await fs.stat(dir).catch(() => undefined)
-      if (stat?.isDirectory()) valid.push(dir)
+      const stat = await Deno.stat(dir).catch(() => undefined)
+      if (stat?.isDirectory) valid.push(dir)
     }
     return valid
   }

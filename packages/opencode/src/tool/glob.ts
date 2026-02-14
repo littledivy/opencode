@@ -45,9 +45,8 @@ export const GlobTool = Tool.define("glob", {
         break
       }
       const full = path.resolve(search, file)
-      const stats = await Bun.file(full)
-        .stat()
-        .then((x) => x.mtime.getTime())
+      const stats = await Deno.stat(full)
+        .then((x) => x.mtime?.getTime() ?? 0)
         .catch(() => 0)
       files.push({
         path: full,

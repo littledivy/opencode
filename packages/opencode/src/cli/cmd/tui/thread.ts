@@ -5,6 +5,7 @@ import { type rpc } from "./worker"
 import path from "path"
 import { UI } from "@/cli/ui"
 import { iife } from "@/util/iife"
+import { exists } from "@/util/fs-extra"
 import { Log } from "@/util/log"
 import { withNetworkOptions, resolveNetworkOptions } from "@/cli/network"
 import type { Event } from "@opencode-ai/sdk/v2"
@@ -79,7 +80,6 @@ export const TuiThreadCommand = cmd({
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
-    // (Important when running under `bun run` wrappers on Windows.)
     const unguard = win32InstallCtrlCGuard()
     try {
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
@@ -99,7 +99,7 @@ export const TuiThreadCommand = cmd({
       const distWorker = new URL("./cli/cmd/tui/worker.js", import.meta.url)
       const workerPath = await iife(async () => {
         if (typeof OPENCODE_WORKER_PATH !== "undefined") return OPENCODE_WORKER_PATH
-        if (await Bun.file(distWorker).exists()) return distWorker
+        if (await exists(distWorker)) return distWorker
         return localWorker
       })
       try {
@@ -110,14 +110,26 @@ export const TuiThreadCommand = cmd({
       }
 
       const worker = new Worker(workerPath, {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
+        type: "module",
       })
       worker.onerror = (e) => {
+        UI.error("Worker error: " + (e instanceof Error ? e.message : String(e)))
         Log.Default.error(e)
       }
       const client = Rpc.client<typeof rpc>(worker)
+
+      // Wait for worker to finish module initialization before making RPC calls.
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Worker failed to initialize within 30s"))
+        }, 30_000)
+        const unsub = client.on("ready", () => {
+          clearTimeout(timeout)
+          unsub()
+          resolve()
+        })
+      })
+
       process.on("uncaughtException", (e) => {
         Log.Default.error(e)
       })
@@ -129,7 +141,9 @@ export const TuiThreadCommand = cmd({
       })
 
       const prompt = await iife(async () => {
-        const piped = !process.stdin.isTTY ? await Bun.stdin.text() : undefined
+        const piped = !process.stdin.isTTY
+          ? await new Response(Deno.stdin.readable).text()
+          : undefined
         if (!args.prompt) return piped
         return piped ? piped + "\n" + args.prompt : args.prompt
       })
@@ -153,7 +167,7 @@ export const TuiThreadCommand = cmd({
         const server = await client.call("server", networkOpts)
         url = server.url
       } else {
-        // Use direct RPC communication (no HTTP)
+        // Use direct RPC communication (no HTTP server)
         url = "http://opencode.internal"
         customFetch = createWorkerFetch(client)
         events = createEventSource(client)

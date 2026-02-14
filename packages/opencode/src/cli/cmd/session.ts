@@ -7,6 +7,7 @@ import { Locale } from "../../util/locale"
 import { Flag } from "../../flag/flag"
 import { EOL } from "os"
 import path from "path"
+import { which } from "@/util/which"
 
 function pagerCmd(): string[] {
   const lessOptions = ["-R", "-S"]
@@ -15,20 +16,20 @@ function pagerCmd(): string[] {
   }
 
   // user could have less installed via other options
-  const lessOnPath = Bun.which("less")
+  const lessOnPath = which("less")
   if (lessOnPath) {
-    if (Bun.file(lessOnPath).size) return [lessOnPath, ...lessOptions]
+    try { if (Deno.statSync(lessOnPath).size) return [lessOnPath, ...lessOptions] } catch {}
   }
 
   if (Flag.OPENCODE_GIT_BASH_PATH) {
     const less = path.join(Flag.OPENCODE_GIT_BASH_PATH, "..", "..", "usr", "bin", "less.exe")
-    if (Bun.file(less).size) return [less, ...lessOptions]
+    try { if (Deno.statSync(less).size) return [less, ...lessOptions] } catch {}
   }
 
-  const git = Bun.which("git")
+  const git = which("git")
   if (git) {
     const less = path.join(git, "..", "..", "usr", "bin", "less.exe")
-    if (Bun.file(less).size) return [less, ...lessOptions]
+    try { if (Deno.statSync(less).size) return [less, ...lessOptions] } catch {}
   }
 
   // Fall back to Windows built-in more (via cmd.exe)
@@ -86,16 +87,18 @@ export const SessionListCommand = cmd({
       const shouldPaginate = process.stdout.isTTY && !args.maxCount && args.format === "table"
 
       if (shouldPaginate) {
-        const proc = Bun.spawn({
-          cmd: pagerCmd(),
-          stdin: "pipe",
+        const cmd = pagerCmd()
+        const proc = new Deno.Command(cmd[0], {
+          args: cmd.slice(1),
+          stdin: "piped",
           stdout: "inherit",
           stderr: "inherit",
-        })
+        }).spawn()
 
-        proc.stdin.write(output)
-        proc.stdin.end()
-        await proc.exited
+        const writer = proc.stdin.getWriter()
+        await writer.write(new TextEncoder().encode(output))
+        await writer.close()
+        await proc.status
       } else {
         console.log(output)
       }

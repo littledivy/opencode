@@ -1,5 +1,6 @@
 import { Instance } from "../project/instance"
 import { Log } from "../util/log"
+import { clearInterval, setInterval } from "node:timers"
 
 export namespace Scheduler {
   const log = Log.create({ service: "scheduler" })
@@ -9,6 +10,7 @@ export namespace Scheduler {
     interval: number
     run: () => Promise<void>
     scope?: "instance" | "global"
+    immediate?: boolean
   }
 
   type Timer = ReturnType<typeof setInterval>
@@ -44,7 +46,9 @@ export namespace Scheduler {
     if (current) clearInterval(current)
 
     entry.tasks.set(task.id, task)
-    void run(task)
+    if (task.immediate !== false) {
+      void run(task)
+    }
     const timer = setInterval(() => {
       void run(task)
     }, task.interval)

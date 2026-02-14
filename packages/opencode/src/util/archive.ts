@@ -1,4 +1,4 @@
-import { $ } from "bun"
+import { $ } from "./shell"
 import path from "path"
 
 export namespace Archive {

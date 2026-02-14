@@ -1,4 +1,4 @@
-import { $ } from "bun"
+import { $ } from "./shell"
 import { Flag } from "../flag/flag"
 
 export interface GitResult {
@@ -11,31 +11,27 @@ export interface GitResult {
 /**
  * Run a git command.
  *
- * Uses Bun's lightweight `$` shell by default.  When the process is running
- * as an ACP client, child processes inherit the parent's stdin pipe which
- * carries protocol data – on Windows this causes git to deadlock.  In that
- * case we fall back to `Bun.spawn` with `stdin: "ignore"`.
+ * When the process is running as an ACP client, child processes inherit the
+ * parent's stdin pipe which carries protocol data – on Windows this causes
+ * git to deadlock.  In that case we fall back to Deno.Command with
+ * stdin: "null".
  */
 export async function git(args: string[], opts: { cwd: string; env?: Record<string, string> }): Promise<GitResult> {
   if (Flag.OPENCODE_CLIENT === "acp") {
     try {
-      const proc = Bun.spawn(["git", ...args], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
+      const cmd = new Deno.Command("git", {
+        args,
+        stdin: "null",
+        stdout: "piped",
+        stderr: "piped",
         cwd: opts.cwd,
-        env: opts.env ? { ...process.env, ...opts.env } : process.env,
+        env: opts.env ? { ...process.env, ...opts.env } : undefined,
       })
-      // Read output concurrently with exit to avoid pipe buffer deadlock
-      const [exitCode, stdout, stderr] = await Promise.all([
-        proc.exited,
-        new Response(proc.stdout).arrayBuffer(),
-        new Response(proc.stderr).arrayBuffer(),
-      ])
-      const stdoutBuf = Buffer.from(stdout)
-      const stderrBuf = Buffer.from(stderr)
+      const output = await cmd.output()
+      const stdoutBuf = Buffer.from(output.stdout)
+      const stderrBuf = Buffer.from(output.stderr)
       return {
-        exitCode,
+        exitCode: output.code,
         text: () => stdoutBuf.toString(),
         stdout: stdoutBuf,
         stderr: stderrBuf,

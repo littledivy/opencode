@@ -8,9 +8,8 @@ import { Instance } from "../project/instance"
 import { lazy } from "@/util/lazy"
 import { Language } from "web-tree-sitter"
 
-import { $ } from "bun"
+import { $ } from "@/util/shell"
 import { Filesystem } from "@/util/filesystem"
-import { fileURLToPath } from "url"
 import { Flag } from "@/flag/flag.ts"
 import { Shell } from "@/shell/shell"
 
@@ -23,28 +22,22 @@ const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 
 
 export const log = Log.create({ service: "bash-tool" })
 
-const resolveWasm = (asset: string) => {
-  if (asset.startsWith("file://")) return fileURLToPath(asset)
-  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
-  const url = new URL(asset, import.meta.url)
-  return fileURLToPath(url)
-}
-
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
-  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const treePath = resolveWasm(treeWasm)
+  // WASM imports are rewritten by esbuild to Deno.readFileSync, returning Uint8Array.
+  // Write to temp files since tree-sitter's emscripten expects file paths.
+  const { default: treeSitterWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string)
+  const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string)
+  const tmpDir = Deno.makeTempDirSync({ prefix: "opencode-wasm-" })
+  const treePath = path.join(tmpDir, "tree-sitter.wasm")
+  const bashPath = path.join(tmpDir, "tree-sitter-bash.wasm")
+  Deno.writeFileSync(treePath, treeSitterWasm)
+  Deno.writeFileSync(bashPath, bashWasm)
   await Parser.init({
     locateFile() {
       return treePath
     },
   })
-  const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const bashPath = resolveWasm(bashWasm)
   const bashLanguage = await Language.load(bashPath)
   const p = new Parser()
   p.setLanguage(bashLanguage)

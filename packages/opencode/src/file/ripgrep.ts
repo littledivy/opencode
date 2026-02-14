@@ -1,11 +1,12 @@
 // Ripgrep utility functions
 import path from "path"
 import { Global } from "../global"
-import fs from "fs/promises"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
 import { lazy } from "../util/lazy"
-import { $ } from "bun"
+import { $, readableStreamToText } from "@/util/shell"
+import { which } from "../util/which"
+import { exists, writeFile } from "../util/fs-extra"
 
 import { ZipReader, BlobReader, BlobWriter } from "@zip.js/zip.js"
 import { Log } from "@/util/log"
@@ -123,16 +124,15 @@ export namespace Ripgrep {
   )
 
   const state = lazy(async () => {
-    const system = Bun.which("rg")
+    const system = which("rg")
     if (system) {
-      const stat = await fs.stat(system).catch(() => undefined)
-      if (stat?.isFile()) return { filepath: system }
+      const stat = await Deno.stat(system).catch(() => undefined)
+      if (stat?.isFile) return { filepath: system }
       log.warn("bun.which returned invalid rg path", { filepath: system })
     }
     const filepath = path.join(Global.Path.bin, "rg" + (process.platform === "win32" ? ".exe" : ""))
 
-    const file = Bun.file(filepath)
-    if (!(await file.exists())) {
+    if (!(await exists(filepath))) {
       const platformKey = `${process.arch}-${process.platform}` as keyof typeof PLATFORM
       const config = PLATFORM[platformKey]
       if (!config) throw new UnsupportedPlatformError({ platform: platformKey })
@@ -146,27 +146,30 @@ export namespace Ripgrep {
 
       const buffer = await response.arrayBuffer()
       const archivePath = path.join(Global.Path.bin, filename)
-      await Bun.write(archivePath, buffer)
+      await writeFile(archivePath, new Uint8Array(buffer))
       if (config.extension === "tar.gz") {
-        const args = ["tar", "-xzf", archivePath, "--strip-components=1"]
+        const tarArgs = ["tar", "-xzf", archivePath, "--strip-components=1"]
 
-        if (platformKey.endsWith("-darwin")) args.push("--include=*/rg")
-        if (platformKey.endsWith("-linux")) args.push("--wildcards", "*/rg")
+        if (platformKey.endsWith("-darwin")) tarArgs.push("--include=*/rg")
+        if (platformKey.endsWith("-linux")) tarArgs.push("--wildcards", "*/rg")
 
-        const proc = Bun.spawn(args, {
+        const tarCommand = new Deno.Command(tarArgs[0], {
+          args: tarArgs.slice(1),
           cwd: Global.Path.bin,
-          stderr: "pipe",
-          stdout: "pipe",
+          stdin: "null",
+          stdout: "piped",
+          stderr: "piped",
         })
-        await proc.exited
-        if (proc.exitCode !== 0)
+        const tarProc = await tarCommand.output()
+        if (tarProc.code !== 0) {
           throw new ExtractionFailedError({
             filepath,
-            stderr: await Bun.readableStreamToText(proc.stderr),
+            stderr: new TextDecoder().decode(tarProc.stderr),
           })
+        }
       }
       if (config.extension === "zip") {
-        const zipFileReader = new ZipReader(new BlobReader(new Blob([await Bun.file(archivePath).arrayBuffer()])))
+        const zipFileReader = new ZipReader(new BlobReader(new Blob([await Deno.readFile(archivePath)])))
         const entries = await zipFileReader.getEntries()
         let rgEntry: any
         for (const entry of entries) {
@@ -190,11 +193,11 @@ export namespace Ripgrep {
             stderr: "Failed to extract rg.exe from zip archive",
           })
         }
-        await Bun.write(filepath, await rgBlob.arrayBuffer())
+        await writeFile(filepath, new Uint8Array(await rgBlob.arrayBuffer()))
         await zipFileReader.close()
       }
-      await fs.unlink(archivePath)
-      if (!platformKey.endsWith("-win32")) await fs.chmod(filepath, 0o755)
+      await Deno.remove(archivePath)
+      if (!platformKey.endsWith("-win32")) await Deno.chmod(filepath, 0o755)
     }
 
     return {
@@ -227,9 +230,7 @@ export namespace Ripgrep {
       }
     }
 
-    // Bun.spawn should throw this, but it incorrectly reports that the executable does not exist.
-    // See https://github.com/oven-sh/bun/issues/24012
-    if (!(await fs.stat(input.cwd).catch(() => undefined))?.isDirectory()) {
+    if (!(await Deno.stat(input.cwd).catch(() => undefined))?.isDirectory) {
       throw Object.assign(new Error(`No such file or directory: '${input.cwd}'`), {
         code: "ENOENT",
         errno: -2,
@@ -237,22 +238,22 @@ export namespace Ripgrep {
       })
     }
 
-    const proc = Bun.spawn(args, {
+    const command = new Deno.Command(args[0], {
+      args: args.slice(1),
       cwd: input.cwd,
-      stdout: "pipe",
-      stderr: "ignore",
-      maxBuffer: 1024 * 1024 * 20,
-      signal: input.signal,
+      stdin: "null",
+      stdout: "piped",
+      stderr: "null",
     })
+    const proc = command.spawn()
 
-    const reader = proc.stdout.getReader()
     const decoder = new TextDecoder()
     let buffer = ""
+    const reader = proc.stdout.getReader()
 
     try {
       while (true) {
         input.signal?.throwIfAborted()
-
         const { done, value } = await reader.read()
         if (done) break
 
@@ -269,7 +270,7 @@ export namespace Ripgrep {
       if (buffer) yield buffer
     } finally {
       reader.releaseLock()
-      await proc.exited
+      await proc.status
     }
 
     input.signal?.throwIfAborted()

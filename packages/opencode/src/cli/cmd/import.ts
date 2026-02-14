@@ -7,6 +7,7 @@ import { Storage } from "../../storage/storage"
 import { Instance } from "../../project/instance"
 import { ShareNext } from "../../share/share-next"
 import { EOL } from "os"
+import { readJSON } from "@/util/fs-extra"
 
 /** Discriminated union returned by the ShareNext API (GET /api/share/:id/data) */
 export type ShareData =
@@ -115,8 +116,7 @@ export const ImportCommand = cmd({
 
         exportData = transformed
       } else {
-        const file = Bun.file(args.file)
-        exportData = await file.json().catch(() => {})
+        exportData = await readJSON(args.file).catch(() => {})
         if (!exportData) {
           process.stdout.write(`File not found: ${args.file}`)
           process.stdout.write(EOL)

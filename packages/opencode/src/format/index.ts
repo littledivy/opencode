@@ -110,15 +110,17 @@ export namespace Format {
       for (const item of await getFormatter(ext)) {
         log.info("running", { command: item.command })
         try {
-          const proc = Bun.spawn({
-            cmd: item.command.map((x) => x.replace("$FILE", file)),
+          const cmd = item.command.map((x) => x.replace("$FILE", file))
+          const command = new Deno.Command(cmd[0], {
+            args: cmd.slice(1),
             cwd: Instance.directory,
-            env: { ...process.env, ...item.environment },
-            stdout: "ignore",
-            stderr: "ignore",
+            env: { ...Deno.env.toObject(), ...item.environment },
+            stdin: "null",
+            stdout: "null",
+            stderr: "null",
           })
-          const exit = await proc.exited
-          if (exit !== 0)
+          const proc = await command.output()
+          if (proc.code !== 0)
             log.error("failed", {
               command: item.command,
               ...item.environment,

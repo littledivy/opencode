@@ -1,18 +1,12 @@
 import { realpathSync } from "fs"
 import { dirname, join, relative } from "path"
+import { exists as fsExists, isDir as _isDir } from "./fs-extra"
+import { Glob } from "./glob"
 
 export namespace Filesystem {
-  export const exists = (p: string) =>
-    Bun.file(p)
-      .stat()
-      .then(() => true)
-      .catch(() => false)
+  export const exists = fsExists
 
-  export const isDir = (p: string) =>
-    Bun.file(p)
-      .stat()
-      .then((s) => s.isDirectory())
-      .catch(() => false)
+  export const isDir = _isDir
   /**
    * On Windows, normalize a path to its canonical casing using the filesystem.
    * This is needed because Windows paths are case-insensitive but LSP servers
@@ -70,7 +64,7 @@ export namespace Filesystem {
     const result = []
     while (true) {
       try {
-        const glob = new Bun.Glob(pattern)
+        const glob = new Glob(pattern)
         for await (const match of glob.scan({
           cwd: current,
           absolute: true,

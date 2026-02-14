@@ -7,6 +7,7 @@ import path from "path"
 import { Global } from "@/global"
 import { iife } from "@/util/iife"
 import { createSimpleContext } from "./helper"
+import { readJSON, writeFile } from "@/util/fs-extra"
 import { useToast } from "../ui/toast"
 import { Provider } from "@/provider/provider"
 import { useArgs } from "./args"
@@ -119,7 +120,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         variant: {},
       })
 
-      const file = Bun.file(path.join(Global.Path.state, "model.json"))
+      const filePath = path.join(Global.Path.state, "model.json")
       const state = {
         pending: false,
       }
@@ -130,8 +131,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return
         }
         state.pending = false
-        Bun.write(
-          file,
+        writeFile(
+          filePath,
           JSON.stringify({
             recent: modelStore.recent,
             favorite: modelStore.favorite,
@@ -140,8 +141,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         )
       }
 
-      file
-        .json()
+      readJSON(filePath)
         .then((x) => {
           if (Array.isArray(x.recent)) setModelStore("recent", x.recent)
           if (Array.isArray(x.favorite)) setModelStore("favorite", x.favorite)

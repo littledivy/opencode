@@ -11,7 +11,7 @@ import { createWrapper } from "@parcel/watcher/wrapper"
 import { lazy } from "@/util/lazy"
 import { withTimeout } from "@/util/timeout"
 import type ParcelWatcher from "@parcel/watcher"
-import { $ } from "bun"
+import { $ } from "@/util/shell"
 import { Flag } from "@/flag/flag"
 import { readdir } from "fs/promises"
 
@@ -39,6 +39,15 @@ export namespace FileWatcher {
       )
       return createWrapper(binding) as typeof import("@parcel/watcher")
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const missingNative = message.includes("Cannot find module '@parcel/watcher-")
+      if (missingNative) {
+        log.info("watcher binding unavailable, file watcher disabled", {
+          platform: process.platform,
+          arch: process.arch,
+        })
+        return
+      }
       log.error("failed to load watcher binding", { error })
       return
     }

@@ -4,7 +4,7 @@ import { Bus } from "../bus"
 import { Log } from "../util/log"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import { Server } from "../server/server"
-import { BunProc } from "../bun"
+import { DenoProc } from "../deno"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { CodexAuthPlugin } from "./codex"
@@ -12,14 +12,16 @@ import { Session } from "../session"
 import { NamedError } from "@opencode-ai/util/error"
 import { CopilotAuthPlugin } from "./copilot"
 import { gitlabAuthPlugin as GitlabAuthPlugin } from "@gitlab/opencode-gitlab-auth"
+import { AnthropicAuthPlugin } from "opencode-anthropic-auth"
+import { $ } from "../util/shell"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
 
-  const BUILTIN = ["opencode-anthropic-auth@0.0.13"]
+  const BUILTIN: string[] = []
 
   // Built-in plugins that are directly imported (not installed from npm)
-  const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin]
+  const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin, AnthropicAuthPlugin]
 
   const state = Instance.state(async () => {
     const client = createOpencodeClient({
@@ -36,7 +38,7 @@ export namespace Plugin {
       worktree: Instance.worktree,
       directory: Instance.directory,
       serverUrl: Server.url(),
-      $: Bun.$,
+      $: $ as any,
     }
 
     for (const plugin of INTERNAL_PLUGINS) {
@@ -60,7 +62,7 @@ export namespace Plugin {
         const pkg = lastAtIndex > 0 ? plugin.substring(0, lastAtIndex) : plugin
         const version = lastAtIndex > 0 ? plugin.substring(lastAtIndex + 1) : "latest"
         const builtin = BUILTIN.some((x) => x.startsWith(pkg + "@"))
-        plugin = await BunProc.install(pkg, version).catch((err) => {
+        plugin = await DenoProc.install(pkg, version).catch((err) => {
           if (!builtin) throw err
 
           const message = err instanceof Error ? err.message : String(err)

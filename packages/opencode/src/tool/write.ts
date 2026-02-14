@@ -12,6 +12,7 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { trimDiff } from "./edit"
 import { assertExternalDirectory } from "./external-directory"
+import { exists, readText, writeFile } from "@/util/fs-extra"
 
 const MAX_DIAGNOSTICS_PER_FILE = 20
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -26,10 +27,9 @@ export const WriteTool = Tool.define("write", {
     const filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
     await assertExternalDirectory(ctx, filepath)
 
-    const file = Bun.file(filepath)
-    const exists = await file.exists()
-    const contentOld = exists ? await file.text() : ""
-    if (exists) await FileTime.assert(ctx.sessionID, filepath)
+    const fileExists = await exists(filepath)
+    const contentOld = fileExists ? await readText(filepath) : ""
+    if (fileExists) await FileTime.assert(ctx.sessionID, filepath)
 
     const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, params.content))
     await ctx.ask({
@@ -42,13 +42,13 @@ export const WriteTool = Tool.define("write", {
       },
     })
 
-    await Bun.write(filepath, params.content)
+    await writeFile(filepath, params.content)
     await Bus.publish(File.Event.Edited, {
       file: filepath,
     })
     await Bus.publish(FileWatcher.Event.Updated, {
       file: filepath,
-      event: exists ? "change" : "add",
+      event: fileExists ? "change" : "add",
     })
     FileTime.read(ctx.sessionID, filepath)
 
@@ -77,7 +77,7 @@ export const WriteTool = Tool.define("write", {
       metadata: {
         diagnostics,
         filepath,
-        exists: exists,
+        exists: fileExists,
       },
       output,
     }

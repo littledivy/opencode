@@ -1,11 +1,12 @@
 import type { Argv } from "yargs"
 import path from "path"
-import { pathToFileURL } from "bun"
+import { pathToFileURL } from "node:url"
 import { UI } from "../ui"
 import { cmd } from "./cmd"
 import { Flag } from "../../flag/flag"
 import { bootstrap } from "../bootstrap"
 import { EOL } from "os"
+import { exists } from "@/util/fs-extra"
 import { createOpencodeClient, type Message, type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2"
 import { Server } from "../../server/server"
 import { Provider } from "../../provider/provider"
@@ -299,19 +300,13 @@ export const RunCommand = cmd({
 
       for (const filePath of list) {
         const resolvedPath = path.resolve(process.cwd(), filePath)
-        const file = Bun.file(resolvedPath)
-        const stats = await file.stat().catch(() => {})
-        if (!stats) {
-          UI.error(`File not found: ${filePath}`)
-          process.exit(1)
-        }
-        if (!(await file.exists())) {
+        if (!(await exists(resolvedPath))) {
           UI.error(`File not found: ${filePath}`)
           process.exit(1)
         }
 
-        const stat = await file.stat()
-        const mime = stat.isDirectory() ? "application/x-directory" : "text/plain"
+        const stat = await Deno.stat(resolvedPath)
+        const mime = stat.isDirectory ? "application/x-directory" : "text/plain"
 
         files.push({
           type: "file",
@@ -322,7 +317,7 @@ export const RunCommand = cmd({
       }
     }
 
-    if (!process.stdin.isTTY) message += "\n" + (await Bun.stdin.text())
+    if (!process.stdin.isTTY) message += "\n" + (await new Promise<string>(resolve => { let data = ""; process.stdin.setEncoding("utf-8"); process.stdin.on("data", c => data += c); process.stdin.on("end", () => resolve(data)) }))
 
     if (message.trim().length === 0 && !args.command) {
       UI.error("You must provide a message or a command")

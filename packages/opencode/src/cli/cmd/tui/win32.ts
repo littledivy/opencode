@@ -1,20 +1,18 @@
-import { dlopen, ptr } from "bun:ffi"
-
 const STD_INPUT_HANDLE = -10
 const ENABLE_PROCESSED_INPUT = 0x0001
 
 const kernel = () =>
-  dlopen("kernel32.dll", {
-    GetStdHandle: { args: ["i32"], returns: "ptr" },
-    GetConsoleMode: { args: ["ptr", "ptr"], returns: "i32" },
-    SetConsoleMode: { args: ["ptr", "u32"], returns: "i32" },
-    FlushConsoleInputBuffer: { args: ["ptr"], returns: "i32" },
+  Deno.dlopen("kernel32.dll", {
+    GetStdHandle: { parameters: ["i32"], result: "pointer" },
+    GetConsoleMode: { parameters: ["pointer", "buffer"], result: "i32" },
+    SetConsoleMode: { parameters: ["pointer", "u32"], result: "i32" },
+    FlushConsoleInputBuffer: { parameters: ["pointer"], result: "i32" },
   })
 
 let k32: ReturnType<typeof kernel> | undefined
 
 function load() {
-  if (process.platform !== "win32") return false
+  if (Deno.build.os !== "windows") return false
   try {
     k32 ??= kernel()
     return true
@@ -27,13 +25,13 @@ function load() {
  * Clear ENABLE_PROCESSED_INPUT on the console stdin handle.
  */
 export function win32DisableProcessedInput() {
-  if (process.platform !== "win32") return
-  if (!process.stdin.isTTY) return
+  if (Deno.build.os !== "windows") return
+  if (!Deno.stdin.isTerminal()) return
   if (!load()) return
 
   const handle = k32!.symbols.GetStdHandle(STD_INPUT_HANDLE)
   const buf = new Uint32Array(1)
-  if (k32!.symbols.GetConsoleMode(handle, ptr(buf)) === 0) return
+  if (k32!.symbols.GetConsoleMode(handle, buf) === 0) return
 
   const mode = buf[0]!
   if ((mode & ENABLE_PROCESSED_INPUT) === 0) return
@@ -44,8 +42,8 @@ export function win32DisableProcessedInput() {
  * Discard any queued console input (mouse events, key presses, etc.).
  */
 export function win32FlushInputBuffer() {
-  if (process.platform !== "win32") return
-  if (!process.stdin.isTTY) return
+  if (Deno.build.os !== "windows") return
+  if (!Deno.stdin.isTerminal()) return
   if (!load()) return
 
   const handle = k32!.symbols.GetStdHandle(STD_INPUT_HANDLE)
@@ -66,8 +64,8 @@ let unhook: (() => void) | undefined
  * - A low-frequency poll as a backstop for native/external mode changes.
  */
 export function win32InstallCtrlCGuard() {
-  if (process.platform !== "win32") return
-  if (!process.stdin.isTTY) return
+  if (Deno.build.os !== "windows") return
+  if (!Deno.stdin.isTerminal()) return
   if (!load()) return
   if (unhook) return unhook
 
@@ -77,11 +75,11 @@ export function win32InstallCtrlCGuard() {
   const handle = k32!.symbols.GetStdHandle(STD_INPUT_HANDLE)
   const buf = new Uint32Array(1)
 
-  if (k32!.symbols.GetConsoleMode(handle, ptr(buf)) === 0) return
+  if (k32!.symbols.GetConsoleMode(handle, buf) === 0) return
   const initial = buf[0]!
 
   const enforce = () => {
-    if (k32!.symbols.GetConsoleMode(handle, ptr(buf)) === 0) return
+    if (k32!.symbols.GetConsoleMode(handle, buf) === 0) return
     const mode = buf[0]!
     if ((mode & ENABLE_PROCESSED_INPUT) === 0) return
     k32!.symbols.SetConsoleMode(handle, mode & ~ENABLE_PROCESSED_INPUT)
@@ -90,7 +88,7 @@ export function win32InstallCtrlCGuard() {
   // Some runtimes can re-apply console modes on the next tick; enforce twice.
   const later = () => {
     enforce()
-    setImmediate(enforce)
+    setTimeout(enforce, 0)
   }
 
   let wrapped: ((mode: boolean) => unknown) | undefined
@@ -109,7 +107,7 @@ export function win32InstallCtrlCGuard() {
   later()
 
   const interval = setInterval(enforce, 100)
-  interval.unref()
+  Deno.unrefTimer(interval)
 
   let done = false
   unhook = () => {

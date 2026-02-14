@@ -1,9 +1,10 @@
-import { $ } from "bun"
+import { $ } from "@/util/shell"
 import { platform, release } from "os"
 import clipboardy from "clipboardy"
 import { lazy } from "../../../../util/lazy.js"
 import { tmpdir } from "os"
 import path from "path"
+import { which } from "@/util/which"
 
 /**
  * Writes text to clipboard via OSC 52 escape sequence.
@@ -34,9 +35,8 @@ export namespace Clipboard {
         await $`osascript -e 'set imageData to the clipboard as "PNGf"' -e 'set fileRef to open for access POSIX file "${tmpfile}" with write permission' -e 'set eof fileRef to 0' -e 'write imageData to fileRef' -e 'close access fileRef'`
           .nothrow()
           .quiet()
-        const file = Bun.file(tmpfile)
-        const buffer = await file.arrayBuffer()
-        return { data: Buffer.from(buffer).toString("base64"), mime: "image/png" }
+        const bytes = await Deno.readFile(tmpfile)
+        return { data: Buffer.from(bytes).toString("base64"), mime: "image/png" }
       } catch {
       } finally {
         await $`rm -f "${tmpfile}"`.nothrow().quiet()
@@ -75,7 +75,7 @@ export namespace Clipboard {
   const getCopyMethod = lazy(() => {
     const os = platform()
 
-    if (os === "darwin" && Bun.which("osascript")) {
+    if (os === "darwin" && which("osascript")) {
       console.log("clipboard: using osascript")
       return async (text: string) => {
         const escaped = text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
@@ -84,39 +84,49 @@ export namespace Clipboard {
     }
 
     if (os === "linux") {
-      if (process.env["WAYLAND_DISPLAY"] && Bun.which("wl-copy")) {
+      if (process.env["WAYLAND_DISPLAY"] && which("wl-copy")) {
         console.log("clipboard: using wl-copy")
         return async (text: string) => {
-          const proc = Bun.spawn(["wl-copy"], { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
-          proc.stdin.write(text)
-          proc.stdin.end()
-          await proc.exited.catch(() => {})
+          const proc = new Deno.Command("wl-copy", {
+            args: [],
+            stdin: "piped",
+            stdout: "null",
+            stderr: "null",
+          }).spawn()
+          const writer = proc.stdin.getWriter()
+          await writer.write(new TextEncoder().encode(text))
+          await writer.close()
+          await proc.status.catch(() => {})
         }
       }
-      if (Bun.which("xclip")) {
+      if (which("xclip")) {
         console.log("clipboard: using xclip")
         return async (text: string) => {
-          const proc = Bun.spawn(["xclip", "-selection", "clipboard"], {
-            stdin: "pipe",
-            stdout: "ignore",
-            stderr: "ignore",
-          })
-          proc.stdin.write(text)
-          proc.stdin.end()
-          await proc.exited.catch(() => {})
+          const proc = new Deno.Command("xclip", {
+            args: ["-selection", "clipboard"],
+            stdin: "piped",
+            stdout: "null",
+            stderr: "null",
+          }).spawn()
+          const writer = proc.stdin.getWriter()
+          await writer.write(new TextEncoder().encode(text))
+          await writer.close()
+          await proc.status.catch(() => {})
         }
       }
-      if (Bun.which("xsel")) {
+      if (which("xsel")) {
         console.log("clipboard: using xsel")
         return async (text: string) => {
-          const proc = Bun.spawn(["xsel", "--clipboard", "--input"], {
-            stdin: "pipe",
-            stdout: "ignore",
-            stderr: "ignore",
-          })
-          proc.stdin.write(text)
-          proc.stdin.end()
-          await proc.exited.catch(() => {})
+          const proc = new Deno.Command("xsel", {
+            args: ["--clipboard", "--input"],
+            stdin: "piped",
+            stdout: "null",
+            stderr: "null",
+          }).spawn()
+          const writer = proc.stdin.getWriter()
+          await writer.write(new TextEncoder().encode(text))
+          await writer.close()
+          await proc.status.catch(() => {})
         }
       }
     }
@@ -125,24 +135,22 @@ export namespace Clipboard {
       console.log("clipboard: using powershell")
       return async (text: string) => {
         // Pipe via stdin to avoid PowerShell string interpolation ($env:FOO, $(), etc.)
-        const proc = Bun.spawn(
-          [
-            "powershell.exe",
+        const proc = new Deno.Command("powershell.exe", {
+          args: [
             "-NonInteractive",
             "-NoProfile",
             "-Command",
             "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
           ],
-          {
-            stdin: "pipe",
-            stdout: "ignore",
-            stderr: "ignore",
-          },
-        )
+          stdin: "piped",
+          stdout: "null",
+          stderr: "null",
+        }).spawn()
 
-        proc.stdin.write(text)
-        proc.stdin.end()
-        await proc.exited.catch(() => {})
+        const writer = proc.stdin.getWriter()
+        await writer.write(new TextEncoder().encode(text))
+        await writer.close()
+        await proc.status.catch(() => {})
       }
     }
 

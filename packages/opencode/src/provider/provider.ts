@@ -5,7 +5,7 @@ import { Config } from "../config/config"
 import { mapValues, mergeDeep, omit, pickBy, sortBy } from "remeda"
 import { NoSuchModelError, type Provider as SDK } from "ai"
 import { Log } from "../util/log"
-import { BunProc } from "../bun"
+import { DenoProc } from "../deno"
 import { Plugin } from "../plugin"
 import { ModelsDev } from "./models"
 import { NamedError } from "@opencode-ai/util/error"
@@ -16,6 +16,15 @@ import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
 import { Global } from "../global"
 import path from "path"
+import { readJSON } from "../util/fs-extra"
+
+function djb2Hash(str: string): number {
+  let hash = 5381
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0
+  }
+  return hash >>> 0
+}
 
 // Direct imports for bundled providers
 import { createAmazonBedrock, type AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock"
@@ -227,7 +236,7 @@ export namespace Provider {
       // Only use credential chain if no bearer token exists
       // Bearer token takes precedence over credential chain (profiles, access keys, IAM roles, web identity tokens)
       if (!awsBearerToken) {
-        const { fromNodeProviderChain } = await import(await BunProc.install("@aws-sdk/credential-providers"))
+        const { fromNodeProviderChain } = await import(await DenoProc.install("@aws-sdk/credential-providers"))
 
         // Build credential provider options (only pass profile if specified)
         const credentialProviderOptions = profile ? { profile } : {}
@@ -1006,7 +1015,7 @@ export namespace Provider {
           ...model.headers,
         }
 
-      const key = Bun.hash.xxHash32(JSON.stringify({ providerID: model.providerID, npm: model.api.npm, options }))
+      const key = djb2Hash(JSON.stringify({ providerID: model.providerID, npm: model.api.npm, options }))
       const existing = s.sdk.get(key)
       if (existing) return existing
 
@@ -1065,7 +1074,7 @@ export namespace Provider {
 
       let installedPath: string
       if (!model.api.npm.startsWith("file://")) {
-        installedPath = await BunProc.install(model.api.npm, "latest")
+        installedPath = await DenoProc.install(model.api.npm, "latest")
       } else {
         log.info("loading local provider", { pkg: model.api.npm })
         installedPath = model.api.npm
@@ -1232,8 +1241,7 @@ export namespace Provider {
     if (cfg.model) return parseModel(cfg.model)
 
     const providers = await list()
-    const recent = (await Bun.file(path.join(Global.Path.state, "model.json"))
-      .json()
+    const recent = (await readJSON(path.join(Global.Path.state, "model.json"))
       .then((x) => (Array.isArray(x.recent) ? x.recent : []))
       .catch(() => [])) as { providerID: string; modelID: string }[]
     for (const entry of recent) {

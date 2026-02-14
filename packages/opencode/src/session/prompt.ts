@@ -1,6 +1,5 @@
 import path from "path"
 import os from "os"
-import fs from "fs/promises"
 import z from "zod"
 import { Identifier } from "../id/id"
 import { MessageV2 } from "./message-v2"
@@ -32,7 +31,9 @@ import { Flag } from "../flag/flag"
 import { ulid } from "ulid"
 import { spawn } from "child_process"
 import { Command } from "../command"
-import { $, fileURLToPath, pathToFileURL } from "bun"
+import { $ } from "@/util/shell"
+import { exists } from "@/util/fs-extra"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { ConfigMarkdown } from "../config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/util/error"
@@ -205,7 +206,7 @@ export namespace SessionPrompt {
           ? path.join(os.homedir(), name.slice(2))
           : path.resolve(Instance.worktree, name)
 
-        const stats = await fs.stat(filepath).catch(() => undefined)
+        const stats = await Deno.stat(filepath).catch(() => undefined)
         if (!stats) {
           const agent = await Agent.get(name)
           if (agent) {
@@ -217,7 +218,7 @@ export namespace SessionPrompt {
           return
         }
 
-        if (stats.isDirectory()) {
+        if (stats.isDirectory) {
           parts.push({
             type: "file",
             url: pathToFileURL(filepath).href,
@@ -298,7 +299,8 @@ export namespace SessionPrompt {
       SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
       if (abort.aborted) break
-      let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      const history = await Array.fromAsync(MessageV2.stream(sessionID))
+      let msgs = await MessageV2.filterCompacted(history)
 
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
@@ -317,7 +319,32 @@ export namespace SessionPrompt {
         }
       }
 
-      if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+      if (!lastUser) {
+        for (let i = history.length - 1; i >= 0; i--) {
+          const msg = history[i]
+          if (msg.info.role !== "user") continue
+          lastUser = msg.info as MessageV2.User
+          break
+        }
+      }
+      if (!lastUser) {
+        for (let i = 0; i < 20; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          const retryHistory = await Array.fromAsync(MessageV2.stream(sessionID))
+          for (let j = retryHistory.length - 1; j >= 0; j--) {
+            const msg = retryHistory[j]
+            if (msg.info.role !== "user") continue
+            lastUser = msg.info as MessageV2.User
+            msgs = await MessageV2.filterCompacted(retryHistory)
+            break
+          }
+          if (lastUser) break
+        }
+      }
+      if (!lastUser) {
+        log.warn("No user message found in stream after retry; exiting prompt loop", { sessionID })
+        break
+      }
       if (
         lastAssistant?.finish &&
         !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
@@ -711,7 +738,8 @@ export namespace SessionPrompt {
       continue
     }
     SessionCompaction.prune({ sessionID })
-    for await (const item of MessageV2.stream(sessionID)) {
+    const stream = await Array.fromAsync(MessageV2.stream(sessionID))
+    for (const item of stream) {
       if (item.info.role === "user") continue
       const queued = state()[sessionID]?.callbacks ?? []
       for (const q of queued) {
@@ -719,7 +747,19 @@ export namespace SessionPrompt {
       }
       return item
     }
-    throw new Error("Impossible")
+    const fallback = stream[stream.length - 1]
+    if (fallback) {
+      log.warn("No assistant message found in stream; returning last message as fallback", {
+        sessionID,
+        role: fallback.info.role,
+      })
+      const queued = state()[sessionID]?.callbacks ?? []
+      for (const q of queued) {
+        q.resolve(fallback)
+      }
+      return fallback
+    }
+    throw new Error(`No messages found in session stream: ${sessionID}`)
   })
 
   async function lastModel(sessionID: string) {
@@ -1078,11 +1118,10 @@ export namespace SessionPrompt {
               // have to normalize, symbol search returns absolute paths
               // Decode the pathname since URL constructor doesn't automatically decode it
               const filepath = fileURLToPath(part.url)
-              const stat = await Bun.file(filepath)
-                .stat()
+              const stat = await Deno.stat(filepath)
                 .catch(() => undefined)
 
-              if (stat?.isDirectory()) {
+              if (stat?.isDirectory) {
                 part.mime = "application/x-directory"
               }
 
@@ -1236,8 +1275,8 @@ export namespace SessionPrompt {
                 ]
               }
 
-              const file = Bun.file(filepath)
               FileTime.read(input.sessionID, filepath)
+              const fileBytes = await Deno.readFile(filepath)
               return [
                 {
                   id: Identifier.ascending("part"),
@@ -1252,7 +1291,7 @@ export namespace SessionPrompt {
                   messageID: info.id,
                   sessionID: input.sessionID,
                   type: "file",
-                  url: `data:${part.mime};base64,` + Buffer.from(await file.bytes()).toString("base64"),
+                  url: `data:${part.mime};base64,` + btoa(String.fromCharCode(...fileBytes)),
                   mime: part.mime,
                   filename: part.filename!,
                   source: part.source,
@@ -1361,8 +1400,8 @@ export namespace SessionPrompt {
     // Switching from plan mode to build mode
     if (input.agent.name !== "plan" && assistantMessage?.info.agent === "plan") {
       const plan = Session.plan(input.session)
-      const exists = await Bun.file(plan).exists()
-      if (exists) {
+      const planExists = await exists(plan)
+      if (planExists) {
         const part = await Session.updatePart({
           id: Identifier.ascending("part"),
           messageID: userMessage.info.id,
@@ -1380,8 +1419,8 @@ export namespace SessionPrompt {
     // Entering plan mode
     if (input.agent.name === "plan" && assistantMessage?.info.agent !== "plan") {
       const plan = Session.plan(input.session)
-      const exists = await Bun.file(plan).exists()
-      if (!exists) await fs.mkdir(path.dirname(plan), { recursive: true })
+      const planExists = await exists(plan)
+      if (!planExists) await Deno.mkdir(path.dirname(plan), { recursive: true })
       const part = await Session.updatePart({
         id: Identifier.ascending("part"),
         messageID: userMessage.info.id,
@@ -1391,7 +1430,7 @@ export namespace SessionPrompt {
 Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
 
 ## Plan File Info:
-${exists ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.` : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`}
+${planExists ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.` : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`}
 You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
 
 ## Plan Workflow

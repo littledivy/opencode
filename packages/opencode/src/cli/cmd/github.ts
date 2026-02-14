@@ -26,7 +26,8 @@ import { Provider } from "../../provider/provider"
 import { Bus } from "../../bus"
 import { MessageV2 } from "../../session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
-import { $ } from "bun"
+import { $, ShellError, sleep } from "../../util/shell"
+import { writeFile } from "../../util/fs-extra"
 
 type GitHubAuthor = {
   login: string
@@ -340,7 +341,7 @@ export const GithubInstallCommand = cmd({
               }
 
               retries++
-              await Bun.sleep(1000)
+              await sleep(1000)
             } while (true)
 
             s.stop("Installed GitHub app")
@@ -360,7 +361,7 @@ export const GithubInstallCommand = cmd({
                 ? ""
                 : `\n        env:${providers[provider].env.map((e) => `\n          ${e}: \${{ secrets.${e} }}`).join("")}`
 
-            await Bun.write(
+            await writeFile(
               path.join(app.root, WORKFLOW_FILE),
               `name: opencode
 
@@ -620,7 +621,7 @@ export const GithubRunCommand = cmd({
         exitCode = 1
         console.error(e instanceof Error ? e.message : String(e))
         let msg = e
-        if (e instanceof $.ShellError) {
+        if (e instanceof ShellError) {
           msg = e.stderr.toString()
         } else if (e instanceof Error) {
           msg = e.message
@@ -1281,7 +1282,7 @@ Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
         } catch (e) {
           if (retries > 0) {
             console.log(`Retrying after ${delayMs}ms...`)
-            await Bun.sleep(delayMs)
+            await sleep(delayMs)
             return withRetry(fn, retries - 1, delayMs)
           }
           throw e
